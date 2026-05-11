@@ -12,6 +12,10 @@ const SHEETS = {
   appRecords: "App Kayıtları",
 };
 
+function cleanEnv(value: string | undefined): string {
+  return String(value ?? "").replace(/^\uFEFF/, "").trim();
+}
+
 const sampleSummary: AccountingSummary = {
   spreadsheetId: DEFAULT_SPREADSHEET_ID,
   spreadsheetTitle: SPREADSHEET_TITLE,
@@ -61,16 +65,16 @@ const sampleSummary: AccountingSummary = {
 };
 
 export function hasGoogleCredentials(): boolean {
-  return Boolean(process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY);
+  return Boolean(cleanEnv(process.env.GOOGLE_CLIENT_EMAIL) && cleanEnv(process.env.GOOGLE_PRIVATE_KEY));
 }
 
 function getPrivateKey(): string {
-  return String(process.env.GOOGLE_PRIVATE_KEY ?? "").replace(/\\n/g, "\n");
+  return cleanEnv(process.env.GOOGLE_PRIVATE_KEY).replace(/\\n/g, "\n");
 }
 
 async function getSheetsClient() {
   const auth = new google.auth.JWT({
-    email: process.env.GOOGLE_CLIENT_EMAIL,
+    email: cleanEnv(process.env.GOOGLE_CLIENT_EMAIL),
     key: getPrivateKey(),
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
@@ -162,7 +166,7 @@ function normalizePayload(payload: CreateRecordPayload): Required<CreateRecordPa
 }
 
 export async function getAccountingSummary(): Promise<AccountingSummary> {
-  const spreadsheetId = process.env.GOOGLE_SHEET_ID ?? DEFAULT_SPREADSHEET_ID;
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
 
   if (!hasGoogleCredentials()) {
     return { ...sampleSummary, spreadsheetId, generatedAt: new Date().toISOString() };
@@ -217,7 +221,7 @@ export async function createAccountingRecord(payload: CreateRecordPayload): Prom
     throw new Error("Google Sheets yazma işlemi için servis hesabı bilgileri gerekli.");
   }
 
-  const spreadsheetId = process.env.GOOGLE_SHEET_ID ?? DEFAULT_SPREADSHEET_ID;
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
   const sheets = await getSheetsClient();
   const record = normalizePayload(payload);
   const id = randomUUID();
@@ -314,7 +318,7 @@ export async function deleteAppRecord(id: string): Promise<void> {
     throw new Error("Google Sheets silme işlemi için servis hesabı bilgileri gerekli.");
   }
 
-  const spreadsheetId = process.env.GOOGLE_SHEET_ID ?? DEFAULT_SPREADSHEET_ID;
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
   const sheets = await getSheetsClient();
   const metadata = await sheets.spreadsheets.get({ spreadsheetId });
   const appSheet = metadata.data.sheets?.find((sheet) => sheet.properties?.title === SHEETS.appRecords);

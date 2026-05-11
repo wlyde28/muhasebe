@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createAccountingRecord, deleteAppRecord, getAccountingSummary } from "@/lib/sheets";
 
 function checkPin(request: Request): NextResponse | null {
-  const expectedPin = process.env.APP_SHARED_PIN;
+  const expectedPin = String(process.env.APP_SHARED_PIN ?? "").replace(/^\uFEFF/, "").trim();
 
   if (!expectedPin) {
     return null;
