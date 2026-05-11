@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+.next/
+build/
+coverage/
+*.log
+*.tsbuildinfo
+.env
+.env.*
+.vercel/
+web/.next/
+web/node_modules/
+mobile/node_modules/
+mobile/.expo/

@@ -1,0 +1,173 @@
+.page {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 40px 0;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.kicker {
+  color: #12643d;
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.header h1 {
+  color: #17211d;
+  font-size: clamp(32px, 5vw, 56px);
+  line-height: 1;
+  max-width: 760px;
+}
+
+.subtitle {
+  color: #52615b;
+  font-size: 17px;
+  line-height: 1.6;
+  margin-top: 16px;
+  max-width: 680px;
+}
+
+.sheetLink {
+  border: 1px solid #c8d8d0;
+  border-radius: 8px;
+  color: #173f2c;
+  flex: 0 0 auto;
+  font-weight: 700;
+  padding: 12px 16px;
+}
+
+.notice {
+  background: #fff8e8;
+  border: 1px solid #ead9ab;
+  border-radius: 8px;
+  color: #5b4713;
+  line-height: 1.5;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+}
+
+.notice code {
+  font-family: var(--font-geist-mono);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.metrics article,
+.panel {
+  background: #ffffff;
+  border: 1px solid #d9e5df;
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(20, 37, 31, 0.06);
+}
+
+.metrics article {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+}
+
+.metrics span,
+.panelHeader span,
+.row span {
+  color: #67756f;
+  font-size: 13px;
+}
+
+.metrics strong {
+  color: #15241e;
+  font-size: 24px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.panel {
+  min-width: 0;
+}
+
+.panelHeader {
+  align-items: center;
+  border-bottom: 1px solid #e5eee9;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px;
+}
+
+.panelHeader h2 {
+  color: #17211d;
+  font-size: 18px;
+}
+
+.table {
+  display: grid;
+}
+
+.row {
+  align-items: center;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 14px 18px;
+}
+
+.row + .row {
+  border-top: 1px solid #edf3f0;
+}
+
+.row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.row strong,
+.row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row strong {
+  color: #22302b;
+}
+
+.row b {
+  color: #12643d;
+  font-size: 15px;
+}
+
+@media (max-width: 760px) {
+  .page {
+    width: min(100% - 24px, 1120px);
+    padding: 24px 0;
+  }
+
+  .header {
+    display: grid;
+  }
+
+  .sheetLink {
+    width: fit-content;
+  }
+
+  .metrics,
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
