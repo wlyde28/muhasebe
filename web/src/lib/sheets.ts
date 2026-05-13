@@ -123,15 +123,20 @@ function mapReceivables(rows: string[][]): WorkRecord[] {
 function mapTransactions(rows: string[][]): TransactionRecord[] {
   return rows
     .slice(1)
-    .map((row, index) => ({
-      rowNumber: index + 2,
-      date: row[0] ?? "",
-      type: row[1] ?? "",
-      category: row[2] ?? "",
-      description: row[3] ?? "",
-      amount: parseAmount(row[4]),
-      paymentType: row[5] ?? "",
-    }))
+    .map((row, index) => {
+      const shifted = !row[0] && !row[1] && !row[2] && Boolean(row[3] || row[4] || row[5]);
+      const offset = shifted ? 3 : 0;
+
+      return {
+        rowNumber: index + 2,
+        date: row[offset] ?? "",
+        type: row[offset + 1] ?? "",
+        category: row[offset + 2] ?? "",
+        description: row[offset + 3] ?? "",
+        amount: parseAmount(row[offset + 4]),
+        paymentType: row[offset + 5] ?? "",
+      };
+    })
     .filter((row) => row.date || row.type || row.category || row.description || row.amount || row.paymentType);
 }
 
@@ -234,6 +239,27 @@ async function logDeletedRecord(
   });
 }
 
+async function appendTransactionRow(
+  sheets: Awaited<ReturnType<typeof getSheetsClient>>,
+  spreadsheetId: string,
+  row: (string | number)[],
+): Promise<void> {
+  const existing = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${SHEETS.transactions}!A:I`,
+  });
+  const nextRow = (existing.data.values?.length ?? 0) + 1;
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${SHEETS.transactions}!A${nextRow}:F${nextRow}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [row],
+    },
+  });
+}
+
 function normalizePayload(payload: CreateRecordPayload): Required<CreateRecordPayload> {
   const amount = Number(payload.amount);
 
@@ -273,7 +299,7 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
     ranges: [
       "'Kaplan Teknik'!A1:D500",
       "'Tahsilat Takibi'!A1:D500",
-      "Sheet1!A1:F500",
+      "Sheet1!A1:I500",
       "'App Kayıtları'!A1:K500",
       "'Silinen Kayıtlar'!A1:H500",
     ],
@@ -367,15 +393,14 @@ export async function markReceivableCollected(payload: MarkReceivableCollectedPa
     },
   });
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${SHEETS.transactions}!A:F`,
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: {
-      values: [[date, "Gelir", "Tahsilat", `${record.customer} - ${record.job}`, record.amount, paymentType]],
-    },
-  });
+  await appendTransactionRow(sheets, spreadsheetId, [
+    date,
+    "Gelir",
+    "Tahsilat",
+    `${record.customer} - ${record.job}`,
+    record.amount,
+    paymentType,
+  ]);
 
   return { ...record, status: "Tahsil Edildi" };
 }
@@ -524,25 +549,37 @@ export async function createAccountingRecord(payload: CreateRecordPayload): Prom
     );
 
     if (record.paymentStatus === "Tahsil Edildi") {
-      appendRows.push({
-        range: `${SHEETS.transactions}!A:F`,
-        values: [[date, "Gelir", record.jobType, record.description || record.customer, record.amount, record.paymentType]],
-      });
+      await appendTransactionRow(sheets, spreadsheetId, [
+        date,
+        "Gelir",
+        record.jobType,
+        record.description || record.customer,
+        record.amount,
+        record.paymentType,
+      ]);
     }
   }
 
   if (record.recordType === "payment") {
-    appendRows.push({
-      range: `${SHEETS.transactions}!A:F`,
-      values: [[date, "Gelir", "Tahsilat", record.description || record.customer, record.amount, record.paymentType]],
-    });
+    await appendTransactionRow(sheets, spreadsheetId, [
+      date,
+      "Gelir",
+      "Tahsilat",
+      record.description || record.customer,
+      record.amount,
+      record.paymentType,
+    ]);
   }
 
   if (record.recordType === "expense") {
-    appendRows.push({
-      range: `${SHEETS.transactions}!A:F`,
-      values: [[date, "Gider", record.jobType, record.description || record.customer, record.amount, record.paymentType]],
-    });
+    await appendTransactionRow(sheets, spreadsheetId, [
+      date,
+      "Gider",
+      record.jobType,
+      record.description || record.customer,
+      record.amount,
+      record.paymentType,
+    ]);
   }
 
   await Promise.all(
