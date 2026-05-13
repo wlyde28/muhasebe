@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { createAccountingRecord, deleteAppRecord, getAccountingSummary, markReceivableCollected } from "@/lib/sheets";
+import {
+  createAccountingRecord,
+  deleteAppRecord,
+  deleteTransactionRow,
+  getAccountingSummary,
+  markReceivableCollected,
+  markReceivableUncollected,
+} from "@/lib/sheets";
 
 function checkPin(request: Request): NextResponse | null {
   const expectedPin = String(process.env.APP_SHARED_PIN ?? "").replace(/^\uFEFF/, "").trim();
@@ -59,7 +66,15 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    const id = new URL(request.url).searchParams.get("id");
+    const url = new URL(request.url);
+    const id = url.searchParams.get("id");
+    const type = url.searchParams.get("type");
+    const rowNumber = url.searchParams.get("rowNumber");
+
+    if (type === "transaction") {
+      await deleteTransactionRow({ rowNumber: Number(rowNumber) });
+      return NextResponse.json({ ok: true });
+    }
 
     if (!id) {
       return NextResponse.json({ error: "Kayıt ID gerekli." }, { status: 400 });
@@ -88,12 +103,17 @@ export async function PATCH(request: Request) {
   try {
     const body = await request.json();
 
-    if (body.action !== "mark_receivable_collected") {
-      return NextResponse.json({ error: "Bilinmeyen işlem." }, { status: 400 });
+    if (body.action === "mark_receivable_collected") {
+      const record = await markReceivableCollected(body);
+      return NextResponse.json({ record });
     }
 
-    const record = await markReceivableCollected(body);
-    return NextResponse.json({ record });
+    if (body.action === "mark_receivable_uncollected") {
+      const record = await markReceivableUncollected(body);
+      return NextResponse.json({ record });
+    }
+
+    return NextResponse.json({ error: "Bilinmeyen işlem." }, { status: 400 });
   } catch (error) {
     return NextResponse.json(
       {

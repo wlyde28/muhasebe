@@ -5,6 +5,7 @@ import type {
   AppRecord,
   CreateRecordPayload,
   MarkReceivableCollectedPayload,
+  RowActionPayload,
   TransactionRecord,
   WorkRecord,
 } from "./accounting";
@@ -116,14 +117,18 @@ function mapReceivables(rows: string[][]): WorkRecord[] {
 }
 
 function mapTransactions(rows: string[][]): TransactionRecord[] {
-  return rows.slice(1).map((row) => ({
-    date: row[0] ?? "",
-    type: row[1] ?? "",
-    category: row[2] ?? "",
-    description: row[3] ?? "",
-    amount: parseAmount(row[4]),
-    paymentType: row[5] ?? "",
-  }));
+  return rows
+    .slice(1)
+    .map((row, index) => ({
+      rowNumber: index + 2,
+      date: row[0] ?? "",
+      type: row[1] ?? "",
+      category: row[2] ?? "",
+      description: row[3] ?? "",
+      amount: parseAmount(row[4]),
+      paymentType: row[5] ?? "",
+    }))
+    .filter((row) => row.date || row.type || row.category || row.description || row.amount || row.paymentType);
 }
 
 function mapAppRecords(rows: string[][]): AppRecord[] {
@@ -287,6 +292,49 @@ export async function markReceivableCollected(payload: MarkReceivableCollectedPa
   return { ...record, status: "Tahsil Edildi" };
 }
 
+export async function markReceivableUncollected(payload: RowActionPayload): Promise<WorkRecord> {
+  if (!hasGoogleCredentials()) {
+    throw new Error("Google Sheets düzenleme işlemi için servis hesabı bilgileri gerekli.");
+  }
+
+  const rowNumber = Number(payload.rowNumber);
+
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    throw new Error("Geçerli bir tahsilat satırı seçilmedi.");
+  }
+
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+  const sheets = await getSheetsClient();
+  const rowRange = `'${SHEETS.receivables}'!A${rowNumber}:D${rowNumber}`;
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: rowRange,
+  });
+  const row = response.data.values?.[0] ?? [];
+  const record: WorkRecord = {
+    rowNumber,
+    customer: row[0] ?? "",
+    job: row[1] ?? "",
+    amount: parseAmount(row[2]),
+    status: row[3] ?? "",
+  };
+
+  if (!record.customer || !record.job || record.amount <= 0) {
+    throw new Error("Seçilen tahsilat satırı geçerli bir kayıt değil.");
+  }
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${SHEETS.receivables}'!D${rowNumber}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [["Tahsil Edilmedi"]],
+    },
+  });
+
+  return { ...record, status: "Tahsil Edilmedi" };
+}
+
 export async function createAccountingRecord(payload: CreateRecordPayload): Promise<AppRecord> {
   if (!hasGoogleCredentials()) {
     throw new Error("Google Sheets yazma işlemi için servis hesabı bilgileri gerekli.");
@@ -420,6 +468,46 @@ export async function deleteAppRecord(id: string): Promise<void> {
               dimension: "ROWS",
               startIndex: rowIndex,
               endIndex: rowIndex + 1,
+            },
+          },
+        },
+      ],
+    },
+  });
+}
+
+export async function deleteTransactionRow(payload: RowActionPayload): Promise<void> {
+  if (!hasGoogleCredentials()) {
+    throw new Error("Google Sheets silme işlemi için servis hesabı bilgileri gerekli.");
+  }
+
+  const rowNumber = Number(payload.rowNumber);
+
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    throw new Error("Silinecek hareket satırı seçilmedi.");
+  }
+
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+  const sheets = await getSheetsClient();
+  const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+  const transactionSheet = metadata.data.sheets?.find((sheet) => sheet.properties?.title === SHEETS.transactions);
+  const sheetId = transactionSheet?.properties?.sheetId;
+
+  if (sheetId === undefined) {
+    throw new Error("Gelir gider sekmesi bulunamadı.");
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          deleteDimension: {
+            range: {
+              sheetId,
+              dimension: "ROWS",
+              startIndex: rowNumber - 1,
+              endIndex: rowNumber,
             },
           },
         },

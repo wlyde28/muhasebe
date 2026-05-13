@@ -8,6 +8,7 @@ export type WorkRecord = {
 };
 
 export type TransactionRecord = {
+  rowNumber?: number;
   date: string;
   type: string;
   category: string;
@@ -66,6 +67,10 @@ export type MarkReceivableCollectedPayload = {
   rowNumber?: number;
   paymentType?: string;
   employee?: string;
+};
+
+export type RowActionPayload = {
+  rowNumber?: number;
 };
 
 export function parseAmount(value: unknown): number {

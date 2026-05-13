@@ -14,7 +14,7 @@ import {
   View,
 } from 'react-native';
 
-type EntryPage = 'income' | 'expense';
+type EntryPage = 'income' | 'expense' | 'kaplanIncome' | 'kaplanExpense';
 type PageKey = 'summary' | EntryPage | 'collection' | 'collected';
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
@@ -29,6 +29,7 @@ type WorkRecord = {
 };
 
 type TransactionRecord = {
+  rowNumber?: number;
   date: string;
   type: string;
   category: string;
@@ -108,6 +109,18 @@ const entryConfig: Record<EntryPage, { title: string; subtitle: string; action: 
     action: 'Gideri Kaydet',
     recordType: 'expense',
   },
+  kaplanIncome: {
+    title: 'Kaplan Teknik Gelir',
+    subtitle: 'Kaplan Teknik için yapılan işi ayrı takip et',
+    action: 'Kaplan Geliri Kaydet',
+    recordType: 'job',
+  },
+  kaplanExpense: {
+    title: 'Kaplan Teknik Gider',
+    subtitle: 'Kaplan Teknik masraflarını ayrı takip et',
+    action: 'Kaplan Gideri Kaydet',
+    recordType: 'expense',
+  },
 };
 
 function currency(amount: number) {
@@ -122,6 +135,11 @@ function parseAmount(value: string) {
   return Number(value.replace(/\./g, '').replace(',', '.'));
 }
 
+function isKaplanRecord(record: Pick<TransactionRecord, 'category' | 'description'>) {
+  const text = `${record.category} ${record.description}`.toLocaleLowerCase('tr-TR');
+  return text.includes('kaplan teknik');
+}
+
 export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
   const [activePage, setActivePage] = useState<PageKey>('summary');
@@ -130,7 +148,10 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const entryPage: EntryPage = activePage === 'expense' ? 'expense' : 'income';
+  const entryPage: EntryPage =
+    activePage === 'expense' || activePage === 'kaplanIncome' || activePage === 'kaplanExpense'
+      ? activePage
+      : 'income';
   const activeConfig = entryConfig[entryPage];
 
   const openReceivables = useMemo(
@@ -151,7 +172,7 @@ export default function App() {
   const incomeTransactions = useMemo(
     () =>
       summary?.transactions
-        .filter((record) => record.type === 'Gelir' && record.amount > 0)
+        .filter((record) => record.type === 'Gelir' && record.amount > 0 && !isKaplanRecord(record))
         .slice(-10)
         .reverse() ?? [],
     [summary],
@@ -159,7 +180,23 @@ export default function App() {
   const expenseTransactions = useMemo(
     () =>
       summary?.transactions
-        .filter((record) => record.type === 'Gider' && record.amount > 0)
+        .filter((record) => record.type === 'Gider' && record.amount > 0 && !isKaplanRecord(record))
+        .slice(-10)
+        .reverse() ?? [],
+    [summary],
+  );
+  const kaplanIncomeTransactions = useMemo(
+    () =>
+      summary?.transactions
+        .filter((record) => record.type === 'Gelir' && record.amount > 0 && isKaplanRecord(record))
+        .slice(-10)
+        .reverse() ?? [],
+    [summary],
+  );
+  const kaplanExpenseTransactions = useMemo(
+    () =>
+      summary?.transactions
+        .filter((record) => record.type === 'Gider' && record.amount > 0 && isKaplanRecord(record))
         .slice(-10)
         .reverse() ?? [],
     [summary],
@@ -201,6 +238,8 @@ export default function App() {
 
   function defaultCategory(page: EntryPage) {
     if (page === 'expense') return 'Gider';
+    if (page === 'kaplanExpense') return 'Kaplan Teknik Gider';
+    if (page === 'kaplanIncome') return 'Kaplan Teknik';
     return 'Klima Montajı';
   }
 
@@ -217,11 +256,11 @@ export default function App() {
   function switchPage(page: PageKey) {
     setActivePage(page);
 
-    if (page === 'income' || page === 'expense') {
+    if (page === 'income' || page === 'expense' || page === 'kaplanIncome' || page === 'kaplanExpense') {
       setForm((current) => ({
         ...current,
         category: defaultCategory(page),
-        paymentStatus: page === 'income' ? current.paymentStatus : 'Tahsil Edildi',
+        paymentStatus: page === 'income' || page === 'kaplanIncome' ? current.paymentStatus : 'Tahsil Edildi',
       }));
     }
   }
@@ -234,13 +273,16 @@ export default function App() {
       return;
     }
 
-    if (entryPage !== 'expense' && !form.customer.trim()) {
+    if (entryPage !== 'expense' && entryPage !== 'kaplanExpense' && !form.customer.trim()) {
       Alert.alert('Müşteri gerekli', 'Gelir ve tahsilat kayıtlarında müşteri adı gir.');
       return;
     }
 
     try {
       setSaving(true);
+      const kaplan = entryPage === 'kaplanIncome' || entryPage === 'kaplanExpense';
+      const category = kaplan && !form.category.includes('Kaplan Teknik') ? `Kaplan Teknik - ${form.category}` : form.category;
+
       const response = await fetch(API_URL, {
         method: 'POST',
         headers: requestHeaders,
@@ -248,12 +290,13 @@ export default function App() {
           recordType: activeConfig.recordType,
           customer: form.customer,
           phone: form.phone,
-          jobType: form.category,
+          jobType: category,
           description: form.description,
           amount: numericAmount,
-          paymentStatus: entryPage === 'income' ? form.paymentStatus : 'Tahsil Edildi',
+          paymentStatus: entryPage === 'income' || entryPage === 'kaplanIncome' ? form.paymentStatus : 'Tahsil Edildi',
           paymentType: form.paymentType,
           employee: form.employee,
+          note: kaplan ? 'Kaplan Teknik' : '',
         }),
       });
 
@@ -283,6 +326,43 @@ export default function App() {
       if (!response.ok) {
         const body = await response.json();
         throw new Error(body.detail ?? body.error ?? 'Kayıt silinemedi');
+      }
+
+      await loadSummary();
+    } catch (caught) {
+      Alert.alert('Silinemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function confirmDeleteTransaction(record: TransactionRecord) {
+    Alert.alert(
+      'Hareket silinsin mi?',
+      `${record.description || record.category} kaydı silinecek.`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        { text: 'Sil', style: 'destructive', onPress: () => deleteTransaction(record) },
+      ],
+    );
+  }
+
+  async function deleteTransaction(record: TransactionRecord) {
+    if (!record.rowNumber) {
+      Alert.alert('Satır bulunamadı', 'Bu hareketin Google Sheets satırı belirlenemedi.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const response = await fetch(`${API_URL}?type=transaction&rowNumber=${record.rowNumber}`, {
+        method: 'DELETE',
+        headers: requestHeaders,
+      });
+
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? body.error ?? 'Hareket silinemedi');
       }
 
       await loadSummary();
@@ -340,6 +420,48 @@ export default function App() {
     }
   }
 
+  function confirmMarkUncollected(record: WorkRecord) {
+    Alert.alert(
+      'Tahsilat geri açılsın mı?',
+      `${record.customer} tekrar tahsil edilmedi olarak görünecek.`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        { text: 'Geri Aç', onPress: () => markUncollected(record) },
+      ],
+    );
+  }
+
+  async function markUncollected(record: WorkRecord) {
+    if (!record.rowNumber) {
+      Alert.alert('Satır bulunamadı', 'Bu kaydın Google Sheets satırı belirlenemedi.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const response = await fetch(API_URL, {
+        method: 'PATCH',
+        headers: requestHeaders,
+        body: JSON.stringify({
+          action: 'mark_receivable_uncollected',
+          rowNumber: record.rowNumber,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? body.error ?? 'Tahsilat geri açılamadı');
+      }
+
+      await loadSummary();
+      Alert.alert('Geri açıldı', `${record.customer} tekrar açık tahsilata alındı.`);
+    } catch (caught) {
+      Alert.alert('Güncellenemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -369,6 +491,8 @@ export default function App() {
           <PageTab active={activePage === 'summary'} label="Özet" onPress={() => switchPage('summary')} />
           <PageTab active={activePage === 'income'} label="Gelir" onPress={() => switchPage('income')} />
           <PageTab active={activePage === 'expense'} label="Gider" onPress={() => switchPage('expense')} />
+          <PageTab active={activePage === 'kaplanIncome'} label="Kaplan Gelir" onPress={() => switchPage('kaplanIncome')} />
+          <PageTab active={activePage === 'kaplanExpense'} label="Kaplan Gider" onPress={() => switchPage('kaplanExpense')} />
           <PageTab active={activePage === 'collection'} label="Tahsilat" onPress={() => switchPage('collection')} />
           <PageTab active={activePage === 'collected'} label="Tahsil Edilen" onPress={() => switchPage('collected')} />
         </View>
@@ -392,6 +516,7 @@ export default function App() {
             transactions={incomeTransactions}
             onSubmit={submitRecord}
             onUpdateForm={updateForm}
+            onDeleteTransaction={confirmDeleteTransaction}
           />
         ) : null}
 
@@ -404,6 +529,33 @@ export default function App() {
             transactions={expenseTransactions}
             onSubmit={submitRecord}
             onUpdateForm={updateForm}
+            onDeleteTransaction={confirmDeleteTransaction}
+          />
+        ) : null}
+
+        {activePage === 'kaplanIncome' ? (
+          <EntryPageView
+            page="kaplanIncome"
+            config={activeConfig}
+            form={form}
+            saving={saving}
+            transactions={kaplanIncomeTransactions}
+            onSubmit={submitRecord}
+            onUpdateForm={updateForm}
+            onDeleteTransaction={confirmDeleteTransaction}
+          />
+        ) : null}
+
+        {activePage === 'kaplanExpense' ? (
+          <EntryPageView
+            page="kaplanExpense"
+            config={activeConfig}
+            form={form}
+            saving={saving}
+            transactions={kaplanExpenseTransactions}
+            onSubmit={submitRecord}
+            onUpdateForm={updateForm}
+            onDeleteTransaction={confirmDeleteTransaction}
           />
         ) : null}
 
@@ -415,7 +567,7 @@ export default function App() {
         ) : null}
 
         {activePage === 'collected' ? (
-          <CollectedPage receivables={collectedReceivables} />
+          <CollectedPage receivables={collectedReceivables} onMarkUncollected={confirmMarkUncollected} />
         ) : null}
       </ScrollView>
     </SafeAreaView>
@@ -489,6 +641,7 @@ function EntryPageView({
   transactions,
   onSubmit,
   onUpdateForm,
+  onDeleteTransaction,
 }: {
   page: EntryPage;
   config: { title: string; subtitle: string; action: string };
@@ -497,7 +650,10 @@ function EntryPageView({
   transactions: TransactionRecord[];
   onSubmit: () => void;
   onUpdateForm: (key: keyof FormState, value: string) => void;
+  onDeleteTransaction: (record: TransactionRecord) => void;
 }) {
+  const expensePage = page === 'expense' || page === 'kaplanExpense';
+
   return (
     <>
       <RecordForm
@@ -509,7 +665,7 @@ function EntryPageView({
         onUpdateForm={onUpdateForm}
       />
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{page === 'expense' ? 'Gider Hareketleri' : 'Gelir Hareketleri'}</Text>
+        <Text style={styles.sectionTitle}>{expensePage ? 'Gider Hareketleri' : 'Gelir Hareketleri'}</Text>
         {transactions.length === 0 ? <Text style={styles.empty}>Henüz hareket yok.</Text> : null}
         {transactions.map((record, index) => (
           <ListRow
@@ -517,7 +673,9 @@ function EntryPageView({
             title={record.description || record.category}
             subtitle={`${record.date} · ${record.paymentType}`}
             value={currency(record.amount)}
-            tone={page === 'expense' ? 'red' : 'green'}
+            tone={expensePage ? 'red' : 'green'}
+            actionLabel="Sil"
+            onAction={() => onDeleteTransaction(record)}
           />
         ))}
       </View>
@@ -552,7 +710,13 @@ function CollectionPage({
   );
 }
 
-function CollectedPage({ receivables }: { receivables: WorkRecord[] }) {
+function CollectedPage({
+  receivables,
+  onMarkUncollected,
+}: {
+  receivables: WorkRecord[];
+  onMarkUncollected: (record: WorkRecord) => void;
+}) {
   const collectedTotal = receivables.reduce((sum, record) => sum + record.amount, 0);
 
   return (
@@ -575,6 +739,8 @@ function CollectedPage({ receivables }: { receivables: WorkRecord[] }) {
             subtitle={`${record.job} · tahsil edildi`}
             value={currency(record.amount)}
             tone="green"
+            actionLabel="Geri Aç"
+            onAction={() => onMarkUncollected(record)}
           />
         ))}
       </View>
@@ -597,6 +763,8 @@ function RecordForm({
   onSubmit: () => void;
   onUpdateForm: (key: keyof FormState, value: string) => void;
 }) {
+  const expensePage = page === 'expense' || page === 'kaplanExpense';
+
   return (
     <View style={styles.formCard}>
       <View style={styles.formHeader}>
@@ -608,7 +776,7 @@ function RecordForm({
       </View>
 
       <Input label="Eleman" value={form.employee} onChangeText={(value) => onUpdateForm('employee', value)} placeholder="Örn. Ahmet" />
-      {page !== 'expense' ? (
+      {!expensePage ? (
         <>
           <Input label="Müşteri" value={form.customer} onChangeText={(value) => onUpdateForm('customer', value)} placeholder="Müşteri adı" />
           <Input label="Telefon" value={form.phone} onChangeText={(value) => onUpdateForm('phone', value)} placeholder="İsteğe bağlı" keyboardType="phone-pad" />
@@ -621,10 +789,10 @@ function RecordForm({
         </>
       ) : null}
       <Input
-        label={page === 'expense' ? 'Gider Açıklaması' : 'Açıklama'}
+        label={expensePage ? 'Gider Açıklaması' : 'Açıklama'}
         value={form.description}
         onChangeText={(value) => onUpdateForm('description', value)}
-        placeholder={page === 'expense' ? 'Örn. yakıt, yemek, malzeme alımı' : 'Kısa açıklama'}
+        placeholder={expensePage ? 'Örn. yakıt, yemek, malzeme alımı' : 'Kısa açıklama'}
       />
       <Input label="Tutar" value={form.amount} onChangeText={(value) => onUpdateForm('amount', value)} placeholder="0" keyboardType="decimal-pad" />
 
@@ -639,7 +807,7 @@ function RecordForm({
         onChange={(value) => onUpdateForm('paymentType', value)}
       />
 
-      {page === 'income' ? (
+      {page === 'income' || page === 'kaplanIncome' ? (
         <Segmented
           label="Tahsilat Durumu"
           value={form.paymentStatus}
@@ -744,12 +912,16 @@ function ListRow({
   value,
   tone,
   onPress,
+  actionLabel,
+  onAction,
 }: {
   title: string;
   subtitle: string;
   value: string;
   tone: 'green' | 'red' | 'blue' | 'orange';
   onPress?: () => void;
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
   const content = (
     <>
@@ -762,7 +934,14 @@ function ListRow({
           {subtitle}
         </Text>
       </View>
-      <Text style={[styles.rowValue, styles[`${tone}Text`]]}>{value}</Text>
+      <View style={styles.rowSide}>
+        <Text style={[styles.rowValue, styles[`${tone}Text`]]}>{value}</Text>
+        {actionLabel && onAction ? (
+          <Pressable onPress={onAction} hitSlop={8}>
+            <Text style={styles.inlineAction}>{actionLabel}</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </>
   );
 
@@ -852,6 +1031,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#dfeae4',
     borderRadius: 14,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 5,
     marginBottom: 12,
     padding: 5,
@@ -859,7 +1039,8 @@ const styles = StyleSheet.create({
   pageTab: {
     alignItems: 'center',
     borderRadius: 10,
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '30%',
     minHeight: 42,
     justifyContent: 'center',
   },
@@ -1092,6 +1273,15 @@ const styles = StyleSheet.create({
   },
   rowValue: {
     fontSize: 14,
+    fontWeight: '900',
+  },
+  rowSide: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  inlineAction: {
+    color: '#b33128',
+    fontSize: 12,
     fontWeight: '900',
   },
   greenText: {
