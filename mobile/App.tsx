@@ -498,8 +498,8 @@ export default function App() {
         <StatusBar style="light" />
         <View style={styles.loginScreen}>
           <View style={styles.loginCard}>
-            <Text style={styles.company}>Durukan Klima</Text>
-            <Text style={styles.loginTitle}>Muhasebe Girişi</Text>
+            <Text style={styles.company}>Kullanıcı</Text>
+            <Text style={styles.loginTitle}>Giriş</Text>
             <Segmented
               label="Eleman"
               value={loginEmployee}
@@ -1115,7 +1115,7 @@ export default function App() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSummary} tintColor="#ffffff" />}
       >
         <View style={styles.hero}>
-          <Text style={styles.company}>Durukan Klima · {currentEmployee}</Text>
+          <Text style={styles.company}>{currentEmployee}</Text>
           <Text style={styles.title}>Muhasebe</Text>
           <View style={styles.heroFooter}>
             <SummaryPill label="Net Kar" value={currency(summary?.totals.net ?? 0)} />
