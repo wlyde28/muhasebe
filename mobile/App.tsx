@@ -141,8 +141,8 @@ type ReceivableEditState = {
   status: PaymentStatus;
 };
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000/api/records';
-const APP_PIN = process.env.EXPO_PUBLIC_APP_PIN ?? '';
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'https://web-theta-seven-73.vercel.app/api/records';
+const APP_PIN = process.env.EXPO_PUBLIC_APP_PIN ?? '1234';
 const LOCAL_PIN_KEY = 'durukan-local-pin';
 const REMEMBER_PIN_KEY = 'durukan-remember-pin';
 const REMEMBER_EMPLOYEE_KEY = 'durukan-remember-employee';
