@@ -101,7 +101,7 @@ const tabConfig: Record<TabKey, { title: string; subtitle: string; action: strin
   },
   expense: {
     title: 'Gider',
-    subtitle: 'Yakıt, malzeme ve günlük masrafları işle',
+    subtitle: 'Yapılan masrafın açıklamasını ve tutarını gir',
     action: 'Gideri Kaydet',
     recordType: 'expense',
   },
@@ -181,8 +181,7 @@ export default function App() {
       ...initialForm,
       employee: current.employee,
       paymentType: current.paymentType,
-      category:
-        activeTab === 'expense' ? 'Yakıt' : activeTab === 'collection' ? 'Tahsilat' : 'Klima Montajı',
+      category: activeTab === 'expense' ? 'Gider' : activeTab === 'collection' ? 'Tahsilat' : 'Klima Montajı',
     }));
   }
 
@@ -190,7 +189,7 @@ export default function App() {
     setActiveTab(tab);
     setForm((current) => ({
       ...current,
-      category: tab === 'expense' ? 'Yakıt' : tab === 'collection' ? 'Tahsilat' : 'Klima Montajı',
+      category: tab === 'expense' ? 'Gider' : tab === 'collection' ? 'Tahsilat' : 'Klima Montajı',
       paymentStatus: tab === 'income' ? current.paymentStatus : 'Tahsil Edildi',
     }));
   }
@@ -315,13 +314,20 @@ export default function App() {
               <Input label="Telefon" value={form.phone} onChangeText={(value) => updateForm('phone', value)} placeholder="İsteğe bağlı" keyboardType="phone-pad" />
             </>
           ) : null}
+          {activeTab !== 'expense' ? (
+            <Input
+              label="İş / İşlem"
+              value={form.category}
+              onChangeText={(value) => updateForm('category', value)}
+              placeholder="Klima montajı, servis..."
+            />
+          ) : null}
           <Input
-            label={activeTab === 'expense' ? 'Gider Kategorisi' : 'İş / İşlem'}
-            value={form.category}
-            onChangeText={(value) => updateForm('category', value)}
-            placeholder={activeTab === 'expense' ? 'Yakıt, malzeme...' : 'Klima montajı, servis...'}
+            label={activeTab === 'expense' ? 'Gider Açıklaması' : 'Açıklama'}
+            value={form.description}
+            onChangeText={(value) => updateForm('description', value)}
+            placeholder={activeTab === 'expense' ? 'Örn. yakıt, yemek, malzeme alımı' : 'Kısa açıklama'}
           />
-          <Input label="Açıklama" value={form.description} onChangeText={(value) => updateForm('description', value)} placeholder="Kısa açıklama" />
           <Input label="Tutar" value={form.amount} onChangeText={(value) => updateForm('amount', value)} placeholder="0" keyboardType="decimal-pad" />
 
           <Segmented
