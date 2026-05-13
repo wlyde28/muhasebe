@@ -1,4 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
+import * as LocalAuthentication from 'expo-local-authentication';
+import * as SecureStore from 'expo-secure-store';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -134,6 +136,9 @@ type ReceivableEditState = {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000/api/records';
 const APP_PIN = process.env.EXPO_PUBLIC_APP_PIN ?? '';
+const LOCAL_PIN_KEY = 'durukan-local-pin';
+const REMEMBER_PIN_KEY = 'durukan-remember-pin';
+const REMEMBER_EMPLOYEE_KEY = 'durukan-remember-employee';
 
 const requestHeaders = {
   'Content-Type': 'application/json',
@@ -259,6 +264,13 @@ export default function App() {
   const [currentEmployee, setCurrentEmployee] = useState<EmployeeName | null>(null);
   const [loginEmployee, setLoginEmployee] = useState<EmployeeName>('Durukan');
   const [pinInput, setPinInput] = useState('');
+  const [savedPin, setSavedPin] = useState<string | null>(null);
+  const [rememberPin, setRememberPin] = useState(false);
+  const [creatingPin, setCreatingPin] = useState(false);
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricLabel, setBiometricLabel] = useState('Biyometrik Giriş');
   const [filters, setFilters] = useState<FilterState>({ query: '', startDate: '', endDate: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -366,6 +378,42 @@ export default function App() {
     loadSummary();
   }, [loadSummary]);
 
+  useEffect(() => {
+    async function loadLocalAuth() {
+      const [storedPin, remembered, rememberedEmployee, hasHardware, enrolled, supportedTypes] = await Promise.all([
+        SecureStore.getItemAsync(LOCAL_PIN_KEY),
+        SecureStore.getItemAsync(REMEMBER_PIN_KEY),
+        SecureStore.getItemAsync(REMEMBER_EMPLOYEE_KEY),
+        LocalAuthentication.hasHardwareAsync(),
+        LocalAuthentication.isEnrolledAsync(),
+        LocalAuthentication.supportedAuthenticationTypesAsync(),
+      ]);
+      const employee = EMPLOYEES.includes(rememberedEmployee as EmployeeName) ? (rememberedEmployee as EmployeeName) : 'Durukan';
+
+      setSavedPin(storedPin);
+      setCreatingPin(!storedPin);
+      setRememberPin(remembered === 'true');
+      setLoginEmployee(employee);
+      setBiometricAvailable(Boolean(storedPin && hasHardware && enrolled));
+
+      if (supportedTypes.includes(LocalAuthentication.AuthenticationType.IRIS)) {
+        setBiometricLabel('İris ile Giriş');
+      } else if (supportedTypes.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
+        setBiometricLabel('Yüz ile Giriş');
+      } else if (supportedTypes.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) {
+        setBiometricLabel('Parmak İzi ile Giriş');
+      }
+
+      if (storedPin && remembered === 'true') {
+        setPinInput(storedPin);
+      }
+    }
+
+    loadLocalAuth().catch(() => {
+      setCreatingPin(true);
+    });
+  }, []);
+
   if (!currentEmployee) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -380,10 +428,39 @@ export default function App() {
               options={EMPLOYEES.map((employee) => [employee, employee]) as [string, string][]}
               onChange={(value) => setLoginEmployee(value as EmployeeName)}
             />
-            <Input label="PIN" value={pinInput} onChangeText={setPinInput} placeholder="1234" keyboardType="number-pad" />
-            <Pressable style={styles.primaryButton} onPress={login}>
-              <Text style={styles.primaryButtonText}>Giriş Yap</Text>
-            </Pressable>
+            {creatingPin ? (
+              <>
+                <Input label="Yeni PIN" value={newPin} onChangeText={setNewPin} placeholder="En az 4 hane" keyboardType="number-pad" />
+                <Input label="PIN Tekrar" value={confirmPin} onChangeText={setConfirmPin} placeholder="Tekrar gir" keyboardType="number-pad" />
+                <Pressable style={styles.primaryButton} onPress={saveLocalPin}>
+                  <Text style={styles.primaryButtonText}>PIN Oluştur</Text>
+                </Pressable>
+                {savedPin ? (
+                  <Pressable style={styles.secondaryButtonFull} onPress={() => setCreatingPin(false)}>
+                    <Text style={styles.secondaryButtonText}>Girişe Dön</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <Input label="PIN" value={pinInput} onChangeText={setPinInput} placeholder="PIN" keyboardType="number-pad" />
+                <Pressable style={styles.rememberRow} onPress={() => setRememberPin((current) => !current)}>
+                  <View style={[styles.checkbox, rememberPin && styles.checkboxActive]} />
+                  <Text style={styles.rememberText}>PIN hatırla</Text>
+                </Pressable>
+                <Pressable style={styles.primaryButton} onPress={login}>
+                  <Text style={styles.primaryButtonText}>Giriş Yap</Text>
+                </Pressable>
+                {biometricAvailable ? (
+                  <Pressable style={styles.secondaryButtonFull} onPress={loginWithBiometrics}>
+                    <Text style={styles.secondaryButtonText}>{biometricLabel}</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable style={styles.secondaryButtonFull} onPress={() => setCreatingPin(true)}>
+                  <Text style={styles.secondaryButtonText}>PIN Oluştur / Değiştir</Text>
+                </Pressable>
+              </>
+            )}
           </View>
         </View>
       </SafeAreaView>
@@ -398,14 +475,79 @@ export default function App() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
-  function login() {
-    if (APP_PIN && pinInput.trim() !== APP_PIN) {
+  function completeLogin(employee: EmployeeName) {
+    setCurrentEmployee(employee);
+    setForm((current) => ({ ...current, employee }));
+  }
+
+  async function login() {
+    if (!savedPin) {
+      Alert.alert('PIN gerekli', 'Önce bu cihaz için bir PIN oluştur.');
+      setCreatingPin(true);
+      return;
+    }
+
+    if (pinInput.trim() !== savedPin) {
       Alert.alert('PIN hatalı', 'Lütfen uygulama PIN kodunu kontrol et.');
       return;
     }
 
-    setCurrentEmployee(loginEmployee);
-    setForm((current) => ({ ...current, employee: loginEmployee }));
+    await SecureStore.setItemAsync(REMEMBER_PIN_KEY, rememberPin ? 'true' : 'false');
+    await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
+
+    if (!rememberPin) {
+      setPinInput('');
+    }
+
+    completeLogin(loginEmployee);
+  }
+
+  async function saveLocalPin() {
+    const pin = newPin.trim();
+
+    if (pin.length < 4) {
+      Alert.alert('PIN kısa', 'PIN en az 4 haneli olmalı.');
+      return;
+    }
+
+    if (pin !== confirmPin.trim()) {
+      Alert.alert('PIN eşleşmiyor', 'Yeni PIN ve tekrar alanı aynı olmalı.');
+      return;
+    }
+
+    await SecureStore.setItemAsync(LOCAL_PIN_KEY, pin);
+    await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
+    await SecureStore.setItemAsync(REMEMBER_PIN_KEY, rememberPin ? 'true' : 'false');
+    setSavedPin(pin);
+    setPinInput(rememberPin ? pin : '');
+    setNewPin('');
+    setConfirmPin('');
+    setCreatingPin(false);
+
+    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    const enrolled = await LocalAuthentication.isEnrolledAsync();
+    setBiometricAvailable(hasHardware && enrolled);
+    Alert.alert('PIN oluşturuldu', 'Bu cihaz için giriş PIN’i kaydedildi.');
+  }
+
+  async function loginWithBiometrics() {
+    if (!savedPin) {
+      Alert.alert('PIN gerekli', 'Biyometrik girişten önce PIN oluştur.');
+      return;
+    }
+
+    const result = await LocalAuthentication.authenticateAsync({
+      promptMessage: 'Muhasebe girişini onayla',
+      cancelLabel: 'Vazgeç',
+      fallbackLabel: 'PIN kullan',
+    });
+
+    if (!result.success) {
+      return;
+    }
+
+    await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
+    completeLogin(loginEmployee);
   }
 
   function defaultCategory(page: EntryPage) {
@@ -2072,9 +2214,39 @@ const styles = StyleSheet.create({
     minHeight: 48,
     justifyContent: 'center',
   },
+  secondaryButtonFull: {
+    alignItems: 'center',
+    backgroundColor: '#eef4f0',
+    borderRadius: 12,
+    marginTop: 10,
+    minHeight: 48,
+    justifyContent: 'center',
+  },
   secondaryButtonText: {
     color: '#52615b',
     fontSize: 15,
+    fontWeight: '900',
+  },
+  rememberRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  checkbox: {
+    borderColor: '#9fb2a9',
+    borderRadius: 5,
+    borderWidth: 2,
+    height: 20,
+    width: 20,
+  },
+  checkboxActive: {
+    backgroundColor: '#12643d',
+    borderColor: '#12643d',
+  },
+  rememberText: {
+    color: '#dbeafe',
+    fontSize: 13,
     fontWeight: '900',
   },
   dangerButton: {
