@@ -103,6 +103,12 @@ export type MarkReceivableCollectedPayload = {
 
 export type RowActionPayload = {
   rowNumber?: number;
+  date?: string;
+  type?: string;
+  category?: string;
+  description?: string;
+  amount?: number;
+  paymentType?: string;
 };
 
 export type UpdateReceivablePayload = {

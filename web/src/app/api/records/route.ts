@@ -75,7 +75,15 @@ export async function DELETE(request: Request) {
     const rowNumber = url.searchParams.get("rowNumber");
 
     if (type === "transaction") {
-      await deleteTransactionRow({ rowNumber: Number(rowNumber) });
+      await deleteTransactionRow({
+        rowNumber: Number(rowNumber),
+        date: url.searchParams.get("date") ?? undefined,
+        type: url.searchParams.get("recordType") ?? undefined,
+        category: url.searchParams.get("category") ?? undefined,
+        description: url.searchParams.get("description") ?? undefined,
+        amount: url.searchParams.has("amount") ? Number(url.searchParams.get("amount")) : undefined,
+        paymentType: url.searchParams.get("paymentType") ?? undefined,
+      });
       return NextResponse.json({ ok: true });
     }
 

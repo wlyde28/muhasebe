@@ -421,7 +421,17 @@ export default function App() {
 
     try {
       setSaving(true);
-      const response = await fetch(`${API_URL}?type=transaction&rowNumber=${record.rowNumber}`, {
+      const params = new URLSearchParams({
+        type: 'transaction',
+        rowNumber: String(record.rowNumber),
+        date: record.date,
+        recordType: record.type,
+        category: record.category,
+        description: record.description,
+        amount: String(record.amount),
+        paymentType: record.paymentType,
+      });
+      const response = await fetch(`${API_URL}?${params.toString()}`, {
         method: 'DELETE',
         headers: requestHeaders,
       });
@@ -656,6 +666,10 @@ export default function App() {
         body: JSON.stringify({
           action: 'close_partner_expense',
           rowNumber: record.rowNumber,
+          date: record.date,
+          type: 'Gider',
+          description: record.description,
+          amount: record.amount,
         }),
       });
 

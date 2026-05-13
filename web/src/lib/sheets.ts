@@ -105,16 +105,19 @@ async function getSheetsClient() {
 }
 
 function rowsFromRange(values: string[][] | undefined): string[][] {
-  return values?.filter((row) => row.some((cell) => String(cell ?? "").trim())) ?? [];
+  return values ?? [];
 }
 
 function mapJobs(rows: string[][]): WorkRecord[] {
-  return rows.slice(1).map((row) => ({
-    customer: row[0] ?? "",
-    job: row[1] ?? "",
-    amount: parseAmount(row[2]),
-    date: row[3],
-  }));
+  return rows
+    .slice(1)
+    .map((row) => ({
+      customer: row[0] ?? "",
+      job: row[1] ?? "",
+      amount: parseAmount(row[2]),
+      date: row[3],
+    }))
+    .filter((row) => row.customer || row.job || row.amount || row.date);
 }
 
 function mapReceivables(rows: string[][]): WorkRecord[] {
@@ -134,49 +137,135 @@ function mapTransactions(rows: string[][]): TransactionRecord[] {
   return rows
     .slice(1)
     .map((row, index) => {
-      const shifted = !row[0] && !row[1] && !row[2] && Boolean(row[3] || row[4] || row[5]);
-      const offset = shifted ? 3 : 0;
-
-      return {
-        rowNumber: index + 2,
-        date: row[offset] ?? "",
-        type: row[offset + 1] ?? "",
-        category: row[offset + 2] ?? "",
-        description: row[offset + 3] ?? "",
-        amount: parseAmount(row[offset + 4]),
-        paymentType: row[offset + 5] ?? "",
-      };
+      return mapTransactionRow(row, index + 2);
     })
     .filter((row) => row.date || row.type || row.category || row.description || row.amount || row.paymentType);
 }
 
+function transactionOffset(row: string[]): number {
+  return !row[0] && !row[1] && !row[2] && Boolean(row[3] || row[4] || row[5]) ? 3 : 0;
+}
+
+function mapTransactionRow(row: string[], rowNumber: number): TransactionRecord {
+  const offset = transactionOffset(row);
+
+  return {
+    rowNumber,
+    date: row[offset] ?? "",
+    type: row[offset + 1] ?? "",
+    category: row[offset + 2] ?? "",
+    description: row[offset + 3] ?? "",
+    amount: parseAmount(row[offset + 4]),
+    paymentType: row[offset + 5] ?? "",
+  };
+}
+
+function sameAmount(left: number | undefined, right: number): boolean {
+  return Number.isFinite(Number(left)) && Math.abs(Number(left) - right) < 0.01;
+}
+
+function cleanPartnerMarker(description: string): string {
+  return description.replace(/\s*\[ORTAK:[^\]]+\]\s*/g, "").trim();
+}
+
+function matchesTransaction(record: TransactionRecord, payload: RowActionPayload): boolean {
+  if (payload.type && record.type !== payload.type) return false;
+  if (payload.date && record.date !== payload.date) return false;
+  if (
+    payload.description &&
+    record.description !== payload.description &&
+    cleanPartnerMarker(record.description) !== payload.description
+  ) {
+    return false;
+  }
+  if (payload.amount !== undefined && !sameAmount(payload.amount, record.amount)) return false;
+
+  return Boolean(record.date || record.type || record.category || record.description || record.amount || record.paymentType);
+}
+
+async function findTransactionRow(
+  sheets: Awaited<ReturnType<typeof getSheetsClient>>,
+  spreadsheetId: string,
+  payload: RowActionPayload,
+): Promise<{ record: TransactionRecord; rawRow: string[]; shifted: boolean }> {
+  const readRow = async (rowNumber: number) => {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${SHEETS.transactions}!A${rowNumber}:I${rowNumber}`,
+    });
+    const rawRow = response.data.values?.[0] ?? [];
+    return {
+      record: mapTransactionRow(rawRow, rowNumber),
+      rawRow,
+      shifted: transactionOffset(rawRow) === 3,
+    };
+  };
+
+  const rowNumber = Number(payload.rowNumber);
+
+  if (Number.isInteger(rowNumber) && rowNumber >= 2) {
+    const current = await readRow(rowNumber);
+
+    if (!payload.description || matchesTransaction(current.record, payload)) {
+      return current;
+    }
+  }
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${SHEETS.transactions}!A1:I500`,
+  });
+  const rows = response.data.values ?? [];
+
+  for (let index = 1; index < rows.length; index += 1) {
+    const rawRow = rows[index] ?? [];
+    const record = mapTransactionRow(rawRow, index + 1);
+
+    if (matchesTransaction(record, payload)) {
+      return {
+        record,
+        rawRow,
+        shifted: transactionOffset(rawRow) === 3,
+      };
+    }
+  }
+
+  throw new Error("Seçilen hareket satırı bulunamadı.");
+}
+
 function mapAppRecords(rows: string[][]): AppRecord[] {
-  return rows.slice(1).map((row) => ({
-    id: row[0] ?? "",
-    date: row[1] ?? "",
-    customer: row[2] ?? "",
-    phone: row[3] ?? "",
-    jobType: row[4] ?? "",
-    description: row[5] ?? "",
-    amount: parseAmount(row[6]),
-    paymentStatus: row[7] ?? "",
-    paymentType: row[8] ?? "",
-    note: row[9] ?? "",
-    employee: row[10] ?? "",
-  }));
+  return rows
+    .slice(1)
+    .map((row) => ({
+      id: row[0] ?? "",
+      date: row[1] ?? "",
+      customer: row[2] ?? "",
+      phone: row[3] ?? "",
+      jobType: row[4] ?? "",
+      description: row[5] ?? "",
+      amount: parseAmount(row[6]),
+      paymentStatus: row[7] ?? "",
+      paymentType: row[8] ?? "",
+      note: row[9] ?? "",
+      employee: row[10] ?? "",
+    }))
+    .filter((row) => row.id || row.date || row.customer || row.jobType || row.description || row.amount);
 }
 
 function mapDeletedRecords(rows: string[][]): DeletedRecord[] {
-  return rows.slice(1).map((row) => ({
-    deletedAt: row[0] ?? "",
-    source: row[1] ?? "",
-    rowNumber: parseAmount(row[2]),
-    recordType: row[3] ?? "",
-    customer: row[4] ?? "",
-    description: row[5] ?? "",
-    amount: parseAmount(row[6]),
-    paymentType: row[7] ?? "",
-  }));
+  return rows
+    .slice(1)
+    .map((row) => ({
+      deletedAt: row[0] ?? "",
+      source: row[1] ?? "",
+      rowNumber: parseAmount(row[2]),
+      recordType: row[3] ?? "",
+      customer: row[4] ?? "",
+      description: row[5] ?? "",
+      amount: parseAmount(row[6]),
+      paymentType: row[7] ?? "",
+    }))
+    .filter((row) => row.deletedAt || row.source || row.recordType || row.customer || row.description || row.amount);
 }
 
 function parsePartnerExpense(record: TransactionRecord): PartnerExpense | null {
@@ -189,7 +278,7 @@ function parsePartnerExpense(record: TransactionRecord): PartnerExpense | null {
   const rawPayer = payerMatch?.[1]?.trim();
   const payer = rawPayer === "Şirin" || rawPayer === "Ortağım" ? "Şirin" : "Durukan";
   const status = statusMatch?.[1]?.trim() === "Kapandı" ? "Kapandı" : "Açık";
-  const description = record.description.replace(/\s*\[ORTAK:[^\]]+\]\s*/g, "").trim();
+  const description = cleanPartnerMarker(record.description);
 
   return {
     rowNumber: record.rowNumber,
@@ -549,31 +638,9 @@ export async function closePartnerExpense(payload: RowActionPayload): Promise<Pa
     throw new Error("Google Sheets düzenleme işlemi için servis hesabı bilgileri gerekli.");
   }
 
-  const rowNumber = Number(payload.rowNumber);
-
-  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
-    throw new Error("Geçerli bir ortak gider satırı seçilmedi.");
-  }
-
   const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
   const sheets = await getSheetsClient();
-  const rowRange = `${SHEETS.transactions}!A${rowNumber}:I${rowNumber}`;
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: rowRange,
-  });
-  const row = response.data.values?.[0] ?? [];
-  const shifted = !row[0] && !row[1] && !row[2] && Boolean(row[3] || row[4] || row[5]);
-  const offset = shifted ? 3 : 0;
-  const record: TransactionRecord = {
-    rowNumber,
-    date: row[offset] ?? "",
-    type: row[offset + 1] ?? "",
-    category: row[offset + 2] ?? "",
-    description: row[offset + 3] ?? "",
-    amount: parseAmount(row[offset + 4]),
-    paymentType: row[offset + 5] ?? "",
-  };
+  const { record, shifted } = await findTransactionRow(sheets, spreadsheetId, { ...payload, type: "Gider" });
   const partnerExpense = parsePartnerExpense(record);
 
   if (!partnerExpense) {
@@ -591,7 +658,7 @@ export async function closePartnerExpense(payload: RowActionPayload): Promise<Pa
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${SHEETS.transactions}!${descriptionColumn}${rowNumber}`,
+    range: `${SHEETS.transactions}!${descriptionColumn}${record.rowNumber}`,
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[updatedDescription]],
@@ -772,23 +839,9 @@ export async function deleteTransactionRow(payload: RowActionPayload): Promise<v
     throw new Error("Google Sheets silme işlemi için servis hesabı bilgileri gerekli.");
   }
 
-  const rowNumber = Number(payload.rowNumber);
-
-  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
-    throw new Error("Silinecek hareket satırı seçilmedi.");
-  }
-
   const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
   const sheets = await getSheetsClient();
-  const rowValues = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${SHEETS.transactions}!A${rowNumber}:F${rowNumber}`,
-  });
-  const row = rowValues.data.values?.[0] ?? [];
-
-  if (!row.some((cell) => String(cell ?? "").trim())) {
-    throw new Error("Silinecek hareket satırı bulunamadı.");
-  }
+  const { record } = await findTransactionRow(sheets, spreadsheetId, payload);
 
   const metadata = await sheets.spreadsheets.get({ spreadsheetId });
   const transactionSheet = metadata.data.sheets?.find((sheet) => sheet.properties?.title === SHEETS.transactions);
@@ -801,12 +854,12 @@ export async function deleteTransactionRow(payload: RowActionPayload): Promise<v
   await logDeletedRecord(sheets, spreadsheetId, [
     nowTr(),
     SHEETS.transactions,
-    rowNumber,
-    row[1] ?? "",
+    record.rowNumber ?? "",
+    record.type,
     "",
-    row[3] || row[2] || "",
-    parseAmount(row[4]),
-    row[5] ?? "",
+    record.description || record.category,
+    record.amount,
+    record.paymentType,
   ]);
 
   await sheets.spreadsheets.batchUpdate({
@@ -818,8 +871,8 @@ export async function deleteTransactionRow(payload: RowActionPayload): Promise<v
             range: {
               sheetId,
               dimension: "ROWS",
-              startIndex: rowNumber - 1,
-              endIndex: rowNumber,
+              startIndex: (record.rowNumber ?? 1) - 1,
+              endIndex: record.rowNumber ?? 1,
             },
           },
         },
