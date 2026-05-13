@@ -144,7 +144,6 @@ type ReceivableEditState = {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'https://web-theta-seven-73.vercel.app/api/records';
 const APP_PIN = process.env.EXPO_PUBLIC_APP_PIN ?? '1234';
-const LOCAL_PIN_KEY = 'durukan-local-pin';
 const REMEMBER_PIN_KEY = 'durukan-remember-pin';
 const REMEMBER_EMPLOYEE_KEY = 'durukan-remember-employee';
 const NOTIFY_DATE_KEY = 'durukan-last-receivable-notification';
@@ -157,6 +156,10 @@ Notifications.setNotificationHandler({
     shouldShowList: true,
   }),
 });
+
+function localPinKey(employee: EmployeeName) {
+  return `durukan-local-pin-${employee}`;
+}
 
 const requestHeaders = {
   'Content-Type': 'application/json',
@@ -348,6 +351,18 @@ function monthlyReportHtml(month: string, transactions: TransactionRecord[]) {
   `;
 }
 
+function receivableToIncomeTransaction(record: WorkRecord): TransactionRecord {
+  return {
+    rowNumber: record.rowNumber,
+    date: record.date ?? todayInput(),
+    type: 'Gelir',
+    category: 'Tahsilat',
+    description: `${record.customer} - ${record.job}`,
+    amount: record.amount,
+    paymentType: 'Tahsil Edildi',
+  };
+}
+
 export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
   const [activePage, setActivePage] = useState<PageKey>('summary');
@@ -506,14 +521,14 @@ export default function App() {
 
   useEffect(() => {
     async function loadLocalAuth() {
-      const [storedPin, remembered, rememberedEmployee, hasHardware, enrolled] = await Promise.all([
-        SecureStore.getItemAsync(LOCAL_PIN_KEY),
+      const [remembered, rememberedEmployee, hasHardware, enrolled] = await Promise.all([
         SecureStore.getItemAsync(REMEMBER_PIN_KEY),
         SecureStore.getItemAsync(REMEMBER_EMPLOYEE_KEY),
         LocalAuthentication.hasHardwareAsync(),
         LocalAuthentication.isEnrolledAsync(),
       ]);
       const employee = EMPLOYEES.includes(rememberedEmployee as EmployeeName) ? (rememberedEmployee as EmployeeName) : 'Durukan';
+      const storedPin = await SecureStore.getItemAsync(localPinKey(employee));
 
       setSavedPin(storedPin);
       setCreatingPin(!storedPin);
@@ -544,7 +559,7 @@ export default function App() {
               label="Eleman"
               value={loginEmployee}
               options={EMPLOYEES.map((employee) => [employee, employee]) as [string, string][]}
-              onChange={(value) => setLoginEmployee(value as EmployeeName)}
+              onChange={changeLoginEmployee}
             />
             {creatingPin ? (
               <>
@@ -593,6 +608,17 @@ export default function App() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
+  async function changeLoginEmployee(value: string) {
+    const employee = value as EmployeeName;
+    const pin = await SecureStore.getItemAsync(localPinKey(employee));
+    const remembered = await SecureStore.getItemAsync(REMEMBER_PIN_KEY);
+
+    setLoginEmployee(employee);
+    setSavedPin(pin);
+    setCreatingPin(!pin);
+    setPinInput(pin && remembered === 'true' ? pin : '');
+  }
+
   function completeLogin(employee: EmployeeName) {
     setCurrentEmployee(employee);
     setForm((current) => ({ ...current, employee }));
@@ -633,7 +659,7 @@ export default function App() {
       return;
     }
 
-    await SecureStore.setItemAsync(LOCAL_PIN_KEY, pin);
+    await SecureStore.setItemAsync(localPinKey(loginEmployee), pin);
     await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
     await SecureStore.setItemAsync(REMEMBER_PIN_KEY, rememberPin ? 'true' : 'false');
     setSavedPin(pin);
@@ -1217,7 +1243,7 @@ export default function App() {
             summary={summary}
             recentTransactions={recentTransactions}
             recentAppRecords={recentAppRecords}
-            collectedReceivables={collectedReceivables}
+            collectedReceivables={summary?.receivables.filter((record) => record.status === 'Tahsil Edildi') ?? []}
             onDeleteRecord={deleteRecord}
             reportMonth={monthKey(filters.startDate) || monthKey(todayInput())}
             onCreateMonthlyReport={createMonthlyReportPdf}
@@ -1349,7 +1375,13 @@ function SummaryPage({
   const incomePercent = percent(collectedTotal, chartTotal);
   const expensePercent = percent(expensesTotal, chartTotal);
   const currentMonth = reportMonth || monthKey(todayInput());
-  const monthlyTransactions = summary?.transactions.filter((record) => monthKey(record.date) === currentMonth) ?? [];
+  const monthlyCollectedIncome = collectedReceivables
+    .filter((record) => monthKey(record.date) === currentMonth)
+    .map(receivableToIncomeTransaction);
+  const monthlyTransactions = [
+    ...monthlyCollectedIncome,
+    ...(summary?.transactions.filter((record) => record.type !== 'Gelir' && monthKey(record.date) === currentMonth) ?? []),
+  ];
   const monthlyIncome =
     monthlyTransactions.filter((record) => record.type === 'Gelir').reduce((sum, record) => sum + record.amount, 0);
   const monthlyExpenses =
