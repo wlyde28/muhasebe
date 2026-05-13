@@ -2,8 +2,28 @@ import { getAccountingSummary } from "@/lib/sheets";
 import { toCurrency } from "@/lib/accounting";
 import styles from "./page.module.css";
 
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
-  const summary = await getAccountingSummary();
+  const summary = await getAccountingSummary().catch((error) => ({
+    spreadsheetId: "15kaSfdKd-L1pAQInHCZt9i2Ub-PjrZJFJw1hjusmhiw",
+    spreadsheetTitle: "Durukan Klima Gelir Gider Takibi",
+    configured: false,
+    totals: {
+      jobs: 0,
+      receivables: 0,
+      collected: 0,
+      income: 0,
+      expenses: 0,
+      net: 0,
+    },
+    jobs: [],
+    receivables: [],
+    transactions: [],
+    appRecords: [],
+    generatedAt: new Date().toISOString(),
+    error: error instanceof Error ? error.message : "Google Sheet verisi okunamadı.",
+  }));
   const recentJobs = summary.jobs.slice(-5).reverse();
   const openReceivables = summary.receivables
     .filter((record) => record.status !== "Tahsil Edildi")
@@ -31,8 +51,9 @@ export default async function Home() {
 
       {!summary.configured ? (
         <section className={styles.notice}>
-          Şu an örnek veriler gösteriliyor. Canlı Google Sheets bağlantısı için <code>web/.env.local</code>{" "}
-          dosyasına servis hesabı bilgileri eklenmeli.
+          {"error" in summary && summary.error
+            ? summary.error
+            : "Şu an örnek veriler gösteriliyor. Canlı Google Sheets bağlantısı için web/.env.local dosyasına servis hesabı bilgileri eklenmeli."}
         </section>
       ) : null}
 
