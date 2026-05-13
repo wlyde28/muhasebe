@@ -138,7 +138,7 @@ export default function App() {
   const openReceivables = useMemo(
     () =>
       summary?.receivables
-        .filter((record) => record.customer && record.status !== 'Tahsil Edildi')
+        .filter((record) => record.customer && record.amount > 0 && record.status !== 'Tahsil Edildi')
         .slice(0, 6) ?? [],
     [summary],
   );
