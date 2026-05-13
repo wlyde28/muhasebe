@@ -30,6 +30,12 @@
     },
     "plugins": [
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "3735f656-3b52-4733-909c-94f7db2041cd"
+      }
+    },
+    "owner": "vinscain"
   }
 }
