@@ -579,12 +579,20 @@ export default function App() {
             <Image source={require('./assets/brand-logo.png')} style={styles.loginLogo} resizeMode="contain" />
             <Text style={styles.company}>Kullanıcı</Text>
             <Text style={styles.loginTitle}>Giriş</Text>
-            <Segmented
-              label="Eleman"
-              value={loginEmployee}
-              options={EMPLOYEES.map((employee) => [employee, employee]) as [string, string][]}
-              onChange={changeLoginEmployee}
-            />
+            <Text style={styles.loginEmployeeLabel}>Eleman</Text>
+            <View style={styles.loginEmployeePicker}>
+              {EMPLOYEES.map((employee) => (
+                <Pressable
+                  key={employee}
+                  style={[styles.loginEmployeeButton, loginEmployee === employee && styles.loginEmployeeButtonActive]}
+                  onPress={() => changeLoginEmployee(employee)}
+                >
+                  <Text style={[styles.loginEmployeeText, loginEmployee === employee && styles.loginEmployeeTextActive]}>
+                    {employee}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
             {creatingPin ? (
               <>
                 <Input label="Yeni PIN" value={newPin} onChangeText={setNewPin} placeholder="En az 4 hane" keyboardType="number-pad" />
@@ -2374,6 +2382,39 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
     marginBottom: 14,
+  },
+  loginEmployeeLabel: {
+    color: '#dbeafe',
+    fontSize: 12,
+    fontWeight: '900',
+    marginBottom: 8,
+    marginTop: 8,
+  },
+  loginEmployeePicker: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  loginEmployeeButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderColor: 'rgba(255,255,255,0.22)',
+    borderRadius: 12,
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 54,
+    justifyContent: 'center',
+  },
+  loginEmployeeButtonActive: {
+    backgroundColor: '#ffffff',
+    borderColor: '#ffffff',
+  },
+  loginEmployeeText: {
+    color: '#dbeafe',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  loginEmployeeTextActive: {
+    color: '#0b1f3a',
   },
   hero: {
     backgroundColor: '#0e2a4f',
