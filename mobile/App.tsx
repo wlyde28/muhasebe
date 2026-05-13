@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardTypeOptions,
   Pressable,
   RefreshControl,
@@ -360,7 +361,6 @@ export default function App() {
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [biometricAvailable, setBiometricAvailable] = useState(false);
-  const [biometricLabel, setBiometricLabel] = useState('Biyometrik Giriş');
   const [filters, setFilters] = useState<FilterState>({ query: '', startDate: '', endDate: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -506,13 +506,12 @@ export default function App() {
 
   useEffect(() => {
     async function loadLocalAuth() {
-      const [storedPin, remembered, rememberedEmployee, hasHardware, enrolled, supportedTypes] = await Promise.all([
+      const [storedPin, remembered, rememberedEmployee, hasHardware, enrolled] = await Promise.all([
         SecureStore.getItemAsync(LOCAL_PIN_KEY),
         SecureStore.getItemAsync(REMEMBER_PIN_KEY),
         SecureStore.getItemAsync(REMEMBER_EMPLOYEE_KEY),
         LocalAuthentication.hasHardwareAsync(),
         LocalAuthentication.isEnrolledAsync(),
-        LocalAuthentication.supportedAuthenticationTypesAsync(),
       ]);
       const employee = EMPLOYEES.includes(rememberedEmployee as EmployeeName) ? (rememberedEmployee as EmployeeName) : 'Durukan';
 
@@ -521,14 +520,6 @@ export default function App() {
       setRememberPin(remembered === 'true');
       setLoginEmployee(employee);
       setBiometricAvailable(Boolean(storedPin && hasHardware && enrolled));
-
-      if (supportedTypes.includes(LocalAuthentication.AuthenticationType.IRIS)) {
-        setBiometricLabel('İris ile Giriş');
-      } else if (supportedTypes.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
-        setBiometricLabel('Yüz ile Giriş');
-      } else if (supportedTypes.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) {
-        setBiometricLabel('Parmak İzi ile Giriş');
-      }
 
       if (storedPin && remembered === 'true') {
         setPinInput(storedPin);
@@ -546,6 +537,7 @@ export default function App() {
         <StatusBar style="light" />
         <View style={styles.loginScreen}>
           <View style={styles.loginCard}>
+            <Image source={require('./assets/brand-logo.png')} style={styles.loginLogo} resizeMode="contain" />
             <Text style={styles.company}>Kullanıcı</Text>
             <Text style={styles.loginTitle}>Giriş</Text>
             <Segmented
@@ -579,7 +571,7 @@ export default function App() {
                 </Pressable>
                 {biometricAvailable ? (
                   <Pressable style={styles.secondaryButtonFull} onPress={loginWithBiometrics}>
-                    <Text style={styles.secondaryButtonText}>{biometricLabel}</Text>
+                    <Text style={styles.secondaryButtonText}>Parmak İzi ile Giriş</Text>
                   </Pressable>
                 ) : null}
                 <Pressable style={styles.secondaryButtonFull} onPress={() => setCreatingPin(true)}>
@@ -1182,8 +1174,13 @@ export default function App() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSummary} tintColor="#ffffff" />}
       >
         <View style={styles.hero}>
-          <Text style={styles.company}>{currentEmployee}</Text>
-          <Text style={styles.title}>Muhasebe</Text>
+          <View style={styles.heroHeader}>
+            <Image source={require('./assets/brand-logo.png')} style={styles.heroLogo} resizeMode="contain" />
+            <View>
+              <Text style={styles.company}>{currentEmployee}</Text>
+              <Text style={styles.title}>Muhasebe</Text>
+            </View>
+          </View>
           <View style={styles.heroFooter}>
             <SummaryPill label="Net Kar" value={currency(summary?.totals.net ?? 0)} />
             <SummaryPill label="Tahsil Edilmeyen" value={currency(summary?.totals.receivables ?? 0)} />
@@ -2264,11 +2261,18 @@ const styles = StyleSheet.create({
     padding: 18,
   },
   loginCard: {
+    alignItems: 'stretch',
     backgroundColor: '#102820',
     borderColor: 'rgba(255,255,255,0.12)',
     borderRadius: 18,
     borderWidth: 1,
     padding: 18,
+  },
+  loginLogo: {
+    alignSelf: 'center',
+    height: 118,
+    marginBottom: 12,
+    width: 118,
   },
   loginTitle: {
     color: '#ffffff',
@@ -2285,6 +2289,15 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     overflow: 'hidden',
     padding: 20,
+  },
+  heroHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 14,
+  },
+  heroLogo: {
+    height: 64,
+    width: 64,
   },
   company: {
     color: '#b8d7ff',
