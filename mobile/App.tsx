@@ -1,6 +1,10 @@
 import { StatusBar } from 'expo-status-bar';
+import * as ImagePicker from 'expo-image-picker';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as Notifications from 'expo-notifications';
+import * as Print from 'expo-print';
 import * as SecureStore from 'expo-secure-store';
+import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -18,7 +22,7 @@ import {
 import Svg, { Circle, Path } from 'react-native-svg';
 
 type EntryPage = 'income' | 'expense' | 'kaplanIncome' | 'kaplanExpense';
-type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'partner' | 'deleted';
+type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'partner' | 'customers' | 'kaplanLedger' | 'deleted';
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
@@ -45,11 +49,13 @@ type AppRecord = {
   id: string;
   date: string;
   customer: string;
+  phone: string;
   jobType: string;
   description: string;
   amount: number;
   paymentStatus: string;
   paymentType: string;
+  note: string;
   employee: string;
 };
 
@@ -115,6 +121,7 @@ type FormState = {
   sharedExpense: 'Hayır' | 'Evet';
   expensePayer: 'Durukan' | 'Şirin';
   date: string;
+  photoUri: string;
 };
 
 type FilterState = {
@@ -139,6 +146,16 @@ const APP_PIN = process.env.EXPO_PUBLIC_APP_PIN ?? '';
 const LOCAL_PIN_KEY = 'durukan-local-pin';
 const REMEMBER_PIN_KEY = 'durukan-remember-pin';
 const REMEMBER_EMPLOYEE_KEY = 'durukan-remember-employee';
+const NOTIFY_DATE_KEY = 'durukan-last-receivable-notification';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 const requestHeaders = {
   'Content-Type': 'application/json',
@@ -157,6 +174,7 @@ const initialForm: FormState = {
   sharedExpense: 'Hayır',
   expensePayer: 'Durukan',
   date: todayInput(),
+  photoUri: '',
 };
 
 const entryConfig: Record<EntryPage, { title: string; subtitle: string; action: string; recordType: RecordType }> = {
@@ -257,6 +275,30 @@ function isKaplanRecord(record: Pick<TransactionRecord, 'category' | 'descriptio
   return text.includes('kaplan teknik');
 }
 
+function photoMarker(uri: string) {
+  return uri ? `[FOTO:${uri}]` : '';
+}
+
+function stripMarkers(value: string) {
+  return value.replace(/\s*\[(ORTAK|FOTO):[^\]]+\]\s*/g, ' ').trim();
+}
+
+function receiptHtml(record: WorkRecord) {
+  return `
+    <html>
+      <body style="font-family: Arial; padding: 28px; color: #17211d;">
+        <h1>Durukan Klima</h1>
+        <h2>Tahsilat Makbuzu</h2>
+        <p><strong>Müşteri:</strong> ${record.customer}</p>
+        <p><strong>İş:</strong> ${record.job}</p>
+        <p><strong>Tutar:</strong> ${currency(record.amount)}</p>
+        <p><strong>Tarih:</strong> ${record.date ?? todayInput()}</p>
+        <p><strong>Durum:</strong> Tahsil Edildi</p>
+      </body>
+    </html>
+  `;
+}
+
 export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
   const [activePage, setActivePage] = useState<PageKey>('summary');
@@ -276,6 +318,7 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingReceivable, setEditingReceivable] = useState<ReceivableEditState | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState('');
 
   const entryPage: EntryPage =
     activePage === 'expense' || activePage === 'kaplanIncome' || activePage === 'kaplanExpense'
@@ -356,6 +399,13 @@ export default function App() {
         .reverse() ?? [],
     [summary, filters],
   );
+  const customerNames = useMemo(() => {
+    const names = new Set<string>();
+    summary?.receivables.forEach((record) => record.customer && names.add(record.customer));
+    summary?.appRecords.forEach((record) => record.customer && record.customer !== 'Genel' && names.add(record.customer));
+
+    return [...names].sort((left, right) => left.localeCompare(right, 'tr-TR'));
+  }, [summary]);
 
   const loadSummary = useCallback(async () => {
     try {
@@ -377,6 +427,34 @@ export default function App() {
   useEffect(() => {
     loadSummary();
   }, [loadSummary]);
+
+  useEffect(() => {
+    async function notifyOpenReceivables() {
+      const open = summary?.receivables.filter((record) => record.amount > 0 && record.status !== 'Tahsil Edildi') ?? [];
+
+      if (open.length === 0) return;
+
+      const today = todayInput();
+      const lastNotification = await SecureStore.getItemAsync(NOTIFY_DATE_KEY);
+
+      if (lastNotification === today) return;
+
+      const permission = await Notifications.requestPermissionsAsync();
+
+      if (!permission.granted) return;
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'Açık tahsilat var',
+          body: `${open.length} açık tahsilat, toplam ${currency(open.reduce((sum, record) => sum + record.amount, 0))}`,
+        },
+        trigger: null,
+      });
+      await SecureStore.setItemAsync(NOTIFY_DATE_KEY, today);
+    }
+
+    notifyOpenReceivables().catch(() => undefined);
+  }, [summary]);
 
   useEffect(() => {
     async function loadLocalAuth() {
@@ -622,6 +700,7 @@ export default function App() {
             (entryPage === 'expense' || entryPage === 'kaplanExpense') && form.sharedExpense === 'Evet'
               ? `[ORTAK:${form.expensePayer}|DURUM:Açık]`
               : '',
+            photoMarker(form.photoUri),
           ]
             .filter(Boolean)
             .join(' '),
@@ -991,6 +1070,43 @@ export default function App() {
     }
   }
 
+  async function pickFormPhoto() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert('İzin gerekli', 'Fotoğraf eklemek için galeri izni gerekiyor.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+    });
+
+    if (result.canceled) return;
+
+    setForm((current) => ({ ...current, photoUri: result.assets[0]?.uri ?? '' }));
+  }
+
+  async function createReceiptPdf(record: WorkRecord) {
+    try {
+      const pdf = await Print.printToFileAsync({ html: receiptHtml(record) });
+      const available = await Sharing.isAvailableAsync();
+
+      if (available) {
+        await Sharing.shareAsync(pdf.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Tahsilat makbuzu',
+        });
+        return;
+      }
+
+      Alert.alert('PDF hazır', pdf.uri);
+    } catch (caught) {
+      Alert.alert('PDF oluşturulamadı', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -1025,6 +1141,8 @@ export default function App() {
           <PageTab active={activePage === 'collection'} label="Tahsilat" onPress={() => switchPage('collection')} />
           <PageTab active={activePage === 'collected'} label="Tahsil Edilen" onPress={() => switchPage('collected')} />
           <PageTab active={activePage === 'partner'} label="Ortak Hesabı" onPress={() => switchPage('partner')} />
+          <PageTab active={activePage === 'customers'} label="Müşteri" onPress={() => switchPage('customers')} />
+          <PageTab active={activePage === 'kaplanLedger'} label="Kaplan Cari" onPress={() => switchPage('kaplanLedger')} />
           <PageTab active={activePage === 'deleted'} label="Silinenler" onPress={() => switchPage('deleted')} />
         </View>
 
@@ -1049,6 +1167,7 @@ export default function App() {
             transactions={incomeTransactions}
             onSubmit={submitRecord}
             onUpdateForm={updateForm}
+            onPickPhoto={pickFormPhoto}
             onDeleteTransaction={confirmDeleteTransaction}
           />
         ) : null}
@@ -1062,6 +1181,7 @@ export default function App() {
             transactions={expenseTransactions}
             onSubmit={submitRecord}
             onUpdateForm={updateForm}
+            onPickPhoto={pickFormPhoto}
             onDeleteTransaction={confirmDeleteTransaction}
           />
         ) : null}
@@ -1076,6 +1196,7 @@ export default function App() {
             extraReceivables={kaplanOpenReceivables}
             onSubmit={submitRecord}
             onUpdateForm={updateForm}
+            onPickPhoto={pickFormPhoto}
             onDeleteTransaction={confirmDeleteTransaction}
             onEditReceivable={startEditReceivable}
           />
@@ -1090,6 +1211,7 @@ export default function App() {
             transactions={kaplanExpenseTransactions}
             onSubmit={submitRecord}
             onUpdateForm={updateForm}
+            onPickPhoto={pickFormPhoto}
             onDeleteTransaction={confirmDeleteTransaction}
           />
         ) : null}
@@ -1109,11 +1231,24 @@ export default function App() {
         ) : null}
 
         {activePage === 'collected' ? (
-          <CollectedPage receivables={collectedReceivables} onMarkUncollected={confirmMarkUncollected} />
+          <CollectedPage receivables={collectedReceivables} onMarkUncollected={confirmMarkUncollected} onCreateReceipt={createReceiptPdf} />
         ) : null}
 
         {activePage === 'partner' ? (
           <PartnerPage partner={summary?.partner} saving={saving} onCloseExpense={confirmClosePartnerExpense} />
+        ) : null}
+
+        {activePage === 'customers' ? (
+          <CustomerPage
+            summary={summary}
+            customerNames={customerNames}
+            selectedCustomer={selectedCustomer}
+            onSelectCustomer={setSelectedCustomer}
+          />
+        ) : null}
+
+        {activePage === 'kaplanLedger' ? (
+          <KaplanLedgerPage transactions={summary?.transactions ?? []} receivables={summary?.receivables ?? []} />
         ) : null}
 
         {activePage === 'deleted' ? (
@@ -1212,7 +1347,7 @@ function SummaryPage({
         {recentTransactions.map((record, index) => (
           <ListRow
             key={`${record.date}-${record.description}-${record.amount}-${index}`}
-            title={record.description || record.category}
+            title={stripMarkers(record.description || record.category)}
             subtitle={`${record.date} · ${record.type} · ${record.paymentType}`}
             value={currency(record.amount)}
             tone={record.type === 'Gider' ? 'red' : 'green'}
@@ -1250,6 +1385,7 @@ function EntryPageView({
   extraReceivables = [],
   onSubmit,
   onUpdateForm,
+  onPickPhoto,
   onDeleteTransaction,
   onEditReceivable,
 }: {
@@ -1261,6 +1397,7 @@ function EntryPageView({
   extraReceivables?: WorkRecord[];
   onSubmit: () => void;
   onUpdateForm: (key: keyof FormState, value: string) => void;
+  onPickPhoto: () => void;
   onDeleteTransaction: (record: TransactionRecord) => void;
   onEditReceivable?: (record: WorkRecord) => void;
 }) {
@@ -1275,6 +1412,7 @@ function EntryPageView({
         saving={saving}
         onSubmit={onSubmit}
         onUpdateForm={onUpdateForm}
+        onPickPhoto={onPickPhoto}
       />
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{expensePage ? 'Gider Hareketleri' : 'Gelir Hareketleri'}</Text>
@@ -1293,7 +1431,7 @@ function EntryPageView({
         {transactions.map((record, index) => (
           <ListRow
             key={`${record.date}-${record.description}-${record.amount}-${index}`}
-            title={record.description || record.category}
+            title={stripMarkers(record.description || record.category)}
             subtitle={`${record.date} · ${record.paymentType}`}
             value={currency(record.amount)}
             tone={expensePage ? 'red' : 'green'}
@@ -1403,9 +1541,11 @@ function CollectionPage({
 function CollectedPage({
   receivables,
   onMarkUncollected,
+  onCreateReceipt,
 }: {
   receivables: WorkRecord[];
   onMarkUncollected: (record: WorkRecord) => void;
+  onCreateReceipt: (record: WorkRecord) => void;
 }) {
   const collectedTotal = receivables.reduce((sum, record) => sum + record.amount, 0);
 
@@ -1429,6 +1569,7 @@ function CollectedPage({
             subtitle={`${record.job} · tahsil edildi`}
             value={currency(record.amount)}
             tone="green"
+            onPress={() => onCreateReceipt(record)}
             actionLabel="Geri Aç"
             onAction={() => onMarkUncollected(record)}
           />
@@ -1546,6 +1687,121 @@ function PartnerPage({
   );
 }
 
+function CustomerPage({
+  summary,
+  customerNames,
+  selectedCustomer,
+  onSelectCustomer,
+}: {
+  summary: AccountingSummary | null;
+  customerNames: string[];
+  selectedCustomer: string;
+  onSelectCustomer: (customer: string) => void;
+}) {
+  const activeCustomer = selectedCustomer || customerNames[0] || '';
+  const receivables = summary?.receivables.filter((record) => record.customer === activeCustomer) ?? [];
+  const appRecords = summary?.appRecords.filter((record) => record.customer === activeCustomer) ?? [];
+  const openTotal = receivables
+    .filter((record) => record.status !== 'Tahsil Edildi')
+    .reduce((sum, record) => sum + record.amount, 0);
+  const collectedTotal = receivables
+    .filter((record) => record.status === 'Tahsil Edildi')
+    .reduce((sum, record) => sum + record.amount, 0);
+
+  return (
+    <>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Müşteriler</Text>
+        {customerNames.length === 0 ? <Text style={styles.empty}>Henüz müşteri kaydı yok.</Text> : null}
+        {customerNames.slice(0, 20).map((customer) => (
+          <ListRow
+            key={customer}
+            title={customer}
+            subtitle={customer === activeCustomer ? 'seçili müşteri' : 'müşteri kartını aç'}
+            value=""
+            tone={customer === activeCustomer ? 'blue' : 'orange'}
+            onPress={() => onSelectCustomer(customer)}
+          />
+        ))}
+      </View>
+
+      {activeCustomer ? (
+        <>
+          <View style={styles.summaryGrid}>
+            <Metric label="Açık Borç" value={currency(openTotal)} tone="orange" />
+            <Metric label="Tahsil Edilen" value={currency(collectedTotal)} tone="green" />
+            <Metric label="Kayıt" value={String(appRecords.length + receivables.length)} tone="blue" />
+          </View>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{activeCustomer}</Text>
+            {[...receivables].reverse().map((record, index) => (
+              <ListRow
+                key={`${record.rowNumber}-${index}`}
+                title={record.job}
+                subtitle={`${record.status ?? 'Durum yok'}${record.date ? ` · ${record.date}` : ''}`}
+                value={currency(record.amount)}
+                tone={record.status === 'Tahsil Edildi' ? 'green' : 'orange'}
+              />
+            ))}
+            {appRecords.slice(-12).reverse().map((record) => (
+              <ListRow
+                key={record.id}
+                title={record.description || record.jobType}
+                subtitle={`${record.date} · ${record.employee}${record.note?.includes('[FOTO:') ? ' · foto var' : ''}`}
+                value={currency(record.amount)}
+                tone="blue"
+              />
+            ))}
+          </View>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function KaplanLedgerPage({ transactions, receivables }: { transactions: TransactionRecord[]; receivables: WorkRecord[] }) {
+  const kaplanTransactions = transactions.filter((record) => isKaplanRecord(record));
+  const kaplanReceivables = receivables.filter((record) => record.job.includes('Kaplan Teknik'));
+  const income = kaplanTransactions.filter((record) => record.type === 'Gelir').reduce((sum, record) => sum + record.amount, 0);
+  const expenses = kaplanTransactions.filter((record) => record.type === 'Gider').reduce((sum, record) => sum + record.amount, 0);
+  const open = kaplanReceivables.filter((record) => record.status !== 'Tahsil Edildi').reduce((sum, record) => sum + record.amount, 0);
+
+  return (
+    <>
+      <View style={styles.summaryGrid}>
+        <Metric label="Kaplan Gelir" value={currency(income)} tone="green" />
+        <Metric label="Kaplan Gider" value={currency(expenses)} tone="red" />
+        <Metric label="Açık" value={currency(open)} tone="orange" />
+      </View>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Kaplan Teknik Cari</Text>
+        <View style={styles.totalBand}>
+          <Text style={styles.totalBandLabel}>Net durum</Text>
+          <Text style={styles.totalBandValue}>{currency(income - expenses)}</Text>
+        </View>
+        {kaplanReceivables.slice(-12).reverse().map((record, index) => (
+          <ListRow
+            key={`kaplan-rec-${record.rowNumber}-${index}`}
+            title={record.customer}
+            subtitle={`${record.job} · ${record.status ?? 'Durum yok'}`}
+            value={currency(record.amount)}
+            tone={record.status === 'Tahsil Edildi' ? 'green' : 'orange'}
+          />
+        ))}
+        {kaplanTransactions.slice(-12).reverse().map((record, index) => (
+          <ListRow
+            key={`kaplan-tx-${record.rowNumber}-${index}`}
+            title={stripMarkers(record.description || record.category)}
+            subtitle={`${record.date} · ${record.type} · ${record.paymentType}`}
+            value={currency(record.amount)}
+            tone={record.type === 'Gider' ? 'red' : 'green'}
+          />
+        ))}
+      </View>
+    </>
+  );
+}
+
 function RecordForm({
   page,
   config,
@@ -1553,6 +1809,7 @@ function RecordForm({
   saving,
   onSubmit,
   onUpdateForm,
+  onPickPhoto,
 }: {
   page: EntryPage;
   config: { title: string; subtitle: string; action: string };
@@ -1560,6 +1817,7 @@ function RecordForm({
   saving: boolean;
   onSubmit: () => void;
   onUpdateForm: (key: keyof FormState, value: string) => void;
+  onPickPhoto: () => void;
 }) {
   const expensePage = page === 'expense' || page === 'kaplanExpense';
   const lockedKaplanIncome = page === 'kaplanIncome';
@@ -1607,6 +1865,9 @@ function RecordForm({
         placeholder={expensePage ? 'Örn. yakıt, yemek, malzeme alımı' : 'Kısa açıklama'}
       />
       <Input label="Tutar" value={form.amount} onChangeText={(value) => onUpdateForm('amount', value)} placeholder="0" keyboardType="decimal-pad" />
+      <Pressable style={styles.secondaryButtonFull} onPress={onPickPhoto}>
+        <Text style={styles.secondaryButtonText}>{form.photoUri ? 'Fotoğraf Seçildi' : 'Fotoğraf Ekle'}</Text>
+      </Pressable>
 
       <Segmented
         label="Ödeme Türü"
