@@ -6,6 +6,7 @@ import {
   getAccountingSummary,
   markReceivableCollected,
   markReceivableUncollected,
+  updateReceivable,
 } from "@/lib/sheets";
 
 function checkPin(request: Request): NextResponse | null {
@@ -110,6 +111,11 @@ export async function PATCH(request: Request) {
 
     if (body.action === "mark_receivable_uncollected") {
       const record = await markReceivableUncollected(body);
+      return NextResponse.json({ record });
+    }
+
+    if (body.action === "update_receivable") {
+      const record = await updateReceivable(body);
       return NextResponse.json({ record });
     }
 

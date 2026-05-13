@@ -7,6 +7,7 @@ import type {
   MarkReceivableCollectedPayload,
   RowActionPayload,
   TransactionRecord,
+  UpdateReceivablePayload,
   WorkRecord,
 } from "./accounting";
 import { parseAmount } from "./accounting";
@@ -333,6 +334,48 @@ export async function markReceivableUncollected(payload: RowActionPayload): Prom
   });
 
   return { ...record, status: "Tahsil Edilmedi" };
+}
+
+export async function updateReceivable(payload: UpdateReceivablePayload): Promise<WorkRecord> {
+  if (!hasGoogleCredentials()) {
+    throw new Error("Google Sheets düzenleme işlemi için servis hesabı bilgileri gerekli.");
+  }
+
+  const rowNumber = Number(payload.rowNumber);
+  const amount = Number(payload.amount);
+  const customer = payload.customer?.trim() ?? "";
+  const job = payload.job?.trim() ?? "";
+  const status = payload.status?.trim() || "Tahsil Edilmedi";
+
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    throw new Error("Geçerli bir tahsilat satırı seçilmedi.");
+  }
+
+  if (!customer || !job) {
+    throw new Error("Müşteri ve iş açıklaması zorunlu.");
+  }
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Tutar sıfırdan büyük olmalı.");
+  }
+
+  if (status !== "Tahsil Edildi" && status !== "Tahsil Edilmedi") {
+    throw new Error("Geçersiz tahsilat durumu.");
+  }
+
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+  const sheets = await getSheetsClient();
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${SHEETS.receivables}'!A${rowNumber}:D${rowNumber}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[customer, job, amount, status]],
+    },
+  });
+
+  return { rowNumber, customer, job, amount, status };
 }
 
 export async function createAccountingRecord(payload: CreateRecordPayload): Promise<AppRecord> {

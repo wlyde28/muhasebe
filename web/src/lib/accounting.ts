@@ -73,6 +73,14 @@ export type RowActionPayload = {
   rowNumber?: number;
 };
 
+export type UpdateReceivablePayload = {
+  rowNumber?: number;
+  customer?: string;
+  job?: string;
+  amount?: number;
+  status?: "Tahsil Edildi" | "Tahsil Edilmedi";
+};
+
 export function parseAmount(value: unknown): number {
   if (typeof value === "number") {
     return value;

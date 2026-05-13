@@ -77,6 +77,14 @@ type FormState = {
   paymentStatus: PaymentStatus;
 };
 
+type ReceivableEditState = {
+  rowNumber: number;
+  customer: string;
+  job: string;
+  amount: string;
+  status: PaymentStatus;
+};
+
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000/api/records';
 const APP_PIN = process.env.EXPO_PUBLIC_APP_PIN ?? '';
 
@@ -147,6 +155,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingReceivable, setEditingReceivable] = useState<ReceivableEditState | null>(null);
 
   const entryPage: EntryPage =
     activePage === 'expense' || activePage === 'kaplanIncome' || activePage === 'kaplanExpense'
@@ -210,6 +219,14 @@ export default function App() {
     [summary],
   );
   const recentAppRecords = useMemo(() => summary?.appRecords.slice(-6).reverse() ?? [], [summary]);
+  const kaplanOpenReceivables = useMemo(
+    () =>
+      summary?.receivables
+        .filter((record) => record.amount > 0 && record.status !== 'Tahsil Edildi' && record.job.includes('Kaplan Teknik'))
+        .slice(0, 10)
+        .reverse() ?? [],
+    [summary],
+  );
 
   const loadSummary = useCallback(async () => {
     try {
@@ -281,7 +298,12 @@ export default function App() {
     try {
       setSaving(true);
       const kaplan = entryPage === 'kaplanIncome' || entryPage === 'kaplanExpense';
-      const category = kaplan && !form.category.includes('Kaplan Teknik') ? `Kaplan Teknik - ${form.category}` : form.category;
+      const category =
+        entryPage === 'kaplanIncome'
+          ? 'Kaplan Teknik'
+          : kaplan && !form.category.includes('Kaplan Teknik')
+            ? `Kaplan Teknik - ${form.category}`
+            : form.category;
 
       const response = await fetch(API_URL, {
         method: 'POST',
@@ -462,6 +484,71 @@ export default function App() {
     }
   }
 
+  function startEditReceivable(record: WorkRecord) {
+    if (!record.rowNumber) {
+      Alert.alert('Satır bulunamadı', 'Bu kaydın Google Sheets satırı belirlenemedi.');
+      return;
+    }
+
+    setEditingReceivable({
+      rowNumber: record.rowNumber,
+      customer: record.customer,
+      job: record.job,
+      amount: String(record.amount),
+      status: (record.status === 'Tahsil Edildi' ? 'Tahsil Edildi' : 'Tahsil Edilmedi') as PaymentStatus,
+    });
+    setActivePage('collection');
+  }
+
+  function updateReceivableEdit(key: keyof ReceivableEditState, value: string) {
+    setEditingReceivable((current) => (current ? { ...current, [key]: value } : current));
+  }
+
+  async function saveReceivableEdit() {
+    if (!editingReceivable) return;
+
+    const amount = parseAmount(editingReceivable.amount);
+
+    if (!editingReceivable.customer.trim() || !editingReceivable.job.trim()) {
+      Alert.alert('Eksik bilgi', 'Müşteri ve iş açıklaması boş olamaz.');
+      return;
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      Alert.alert('Tutar gerekli', 'Lütfen sıfırdan büyük bir tutar gir.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const response = await fetch(API_URL, {
+        method: 'PATCH',
+        headers: requestHeaders,
+        body: JSON.stringify({
+          action: 'update_receivable',
+          rowNumber: editingReceivable.rowNumber,
+          customer: editingReceivable.customer,
+          job: editingReceivable.job,
+          amount,
+          status: editingReceivable.status,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? body.error ?? 'Tahsilat düzenlenemedi');
+      }
+
+      setEditingReceivable(null);
+      await loadSummary();
+      Alert.alert('Güncellendi', 'Açık tahsilat kaydı düzenlendi.');
+    } catch (caught) {
+      Alert.alert('Güncellenemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -540,9 +627,11 @@ export default function App() {
             form={form}
             saving={saving}
             transactions={kaplanIncomeTransactions}
+            extraReceivables={kaplanOpenReceivables}
             onSubmit={submitRecord}
             onUpdateForm={updateForm}
             onDeleteTransaction={confirmDeleteTransaction}
+            onEditReceivable={startEditReceivable}
           />
         ) : null}
 
@@ -563,6 +652,12 @@ export default function App() {
           <CollectionPage
             receivables={openReceivables}
             onMarkCollected={confirmMarkCollected}
+            editingReceivable={editingReceivable}
+            saving={saving}
+            onEditReceivable={startEditReceivable}
+            onCancelEdit={() => setEditingReceivable(null)}
+            onUpdateEdit={updateReceivableEdit}
+            onSaveEdit={saveReceivableEdit}
           />
         ) : null}
 
@@ -639,18 +734,22 @@ function EntryPageView({
   form,
   saving,
   transactions,
+  extraReceivables = [],
   onSubmit,
   onUpdateForm,
   onDeleteTransaction,
+  onEditReceivable,
 }: {
   page: EntryPage;
   config: { title: string; subtitle: string; action: string };
   form: FormState;
   saving: boolean;
   transactions: TransactionRecord[];
+  extraReceivables?: WorkRecord[];
   onSubmit: () => void;
   onUpdateForm: (key: keyof FormState, value: string) => void;
   onDeleteTransaction: (record: TransactionRecord) => void;
+  onEditReceivable?: (record: WorkRecord) => void;
 }) {
   const expensePage = page === 'expense' || page === 'kaplanExpense';
 
@@ -666,7 +765,18 @@ function EntryPageView({
       />
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{expensePage ? 'Gider Hareketleri' : 'Gelir Hareketleri'}</Text>
-        {transactions.length === 0 ? <Text style={styles.empty}>Henüz hareket yok.</Text> : null}
+        {transactions.length === 0 && extraReceivables.length === 0 ? <Text style={styles.empty}>Henüz hareket yok.</Text> : null}
+        {extraReceivables.map((record) => (
+          <ListRow
+            key={`receivable-${record.rowNumber}-${record.customer}-${record.amount}`}
+            title={record.customer}
+            subtitle={`${record.job} · açık tahsilat`}
+            value={currency(record.amount)}
+            tone="orange"
+            actionLabel="Düzenle"
+            onAction={onEditReceivable ? () => onEditReceivable(record) : undefined}
+          />
+        ))}
         {transactions.map((record, index) => (
           <ListRow
             key={`${record.date}-${record.description}-${record.amount}-${index}`}
@@ -686,12 +796,72 @@ function EntryPageView({
 function CollectionPage({
   receivables,
   onMarkCollected,
+  editingReceivable,
+  saving,
+  onEditReceivable,
+  onCancelEdit,
+  onUpdateEdit,
+  onSaveEdit,
 }: {
   receivables: WorkRecord[];
   onMarkCollected: (record: WorkRecord) => void;
+  editingReceivable: ReceivableEditState | null;
+  saving: boolean;
+  onEditReceivable: (record: WorkRecord) => void;
+  onCancelEdit: () => void;
+  onUpdateEdit: (key: keyof ReceivableEditState, value: string) => void;
+  onSaveEdit: () => void;
 }) {
   return (
     <>
+      {editingReceivable ? (
+        <View style={styles.formCard}>
+          <View style={styles.formHeader}>
+            <View>
+              <Text style={styles.formTitle}>Tahsilat Düzenle</Text>
+              <Text style={styles.formSubtitle}>Müşteri, iş açıklaması ve tutarı düzelt</Text>
+            </View>
+            <Text style={styles.formBadge}>Satır {editingReceivable.rowNumber}</Text>
+          </View>
+          <Input
+            label="Müşteri"
+            value={editingReceivable.customer}
+            onChangeText={(value) => onUpdateEdit('customer', value)}
+            placeholder="Müşteri adı"
+          />
+          <Input
+            label="İş / Açıklama"
+            value={editingReceivable.job}
+            onChangeText={(value) => onUpdateEdit('job', value)}
+            placeholder="İş açıklaması"
+          />
+          <Input
+            label="Tutar"
+            value={editingReceivable.amount}
+            onChangeText={(value) => onUpdateEdit('amount', value)}
+            placeholder="0"
+            keyboardType="decimal-pad"
+          />
+          <Segmented
+            label="Durum"
+            value={editingReceivable.status}
+            options={[
+              ['Tahsil Edilmedi', 'Açık'],
+              ['Tahsil Edildi', 'Ödendi'],
+            ]}
+            onChange={(value) => onUpdateEdit('status', value)}
+          />
+          <View style={styles.formActions}>
+            <Pressable style={styles.secondaryButton} onPress={onCancelEdit} disabled={saving}>
+              <Text style={styles.secondaryButtonText}>Vazgeç</Text>
+            </Pressable>
+            <Pressable style={[styles.primaryButtonInline, saving && styles.disabled]} onPress={onSaveEdit} disabled={saving}>
+              <Text style={styles.primaryButtonText}>{saving ? 'Kaydediliyor' : 'Kaydet'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Açık Tahsilatlar</Text>
         {receivables.length === 0 ? <Text style={styles.empty}>Açık tahsilat görünmüyor.</Text> : null}
@@ -703,6 +873,8 @@ function CollectionPage({
             value={currency(record.amount)}
             tone="orange"
             onPress={() => onMarkCollected(record)}
+            actionLabel="Düzenle"
+            onAction={() => onEditReceivable(record)}
           />
         ))}
       </View>
@@ -764,6 +936,7 @@ function RecordForm({
   onUpdateForm: (key: keyof FormState, value: string) => void;
 }) {
   const expensePage = page === 'expense' || page === 'kaplanExpense';
+  const lockedKaplanIncome = page === 'kaplanIncome';
 
   return (
     <View style={styles.formCard}>
@@ -780,12 +953,19 @@ function RecordForm({
         <>
           <Input label="Müşteri" value={form.customer} onChangeText={(value) => onUpdateForm('customer', value)} placeholder="Müşteri adı" />
           <Input label="Telefon" value={form.phone} onChangeText={(value) => onUpdateForm('phone', value)} placeholder="İsteğe bağlı" keyboardType="phone-pad" />
-          <Input
-            label="İş / İşlem"
-            value={form.category}
-            onChangeText={(value) => onUpdateForm('category', value)}
-            placeholder="Klima montajı, servis..."
-          />
+          {lockedKaplanIncome ? (
+            <View style={styles.lockedField}>
+              <Text style={styles.inputLabel}>İş / İşlem</Text>
+              <Text style={styles.lockedFieldText}>Kaplan Teknik</Text>
+            </View>
+          ) : (
+            <Input
+              label="İş / İşlem"
+              value={form.category}
+              onChangeText={(value) => onUpdateForm('category', value)}
+              placeholder="Klima montajı, servis..."
+            />
+          )}
         </>
       ) : null}
       <Input
@@ -1191,6 +1371,47 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '900',
+  },
+  primaryButtonInline: {
+    alignItems: 'center',
+    backgroundColor: '#12643d',
+    borderRadius: 12,
+    flex: 1,
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  secondaryButton: {
+    alignItems: 'center',
+    backgroundColor: '#eef4f0',
+    borderRadius: 12,
+    flex: 1,
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  secondaryButtonText: {
+    color: '#52615b',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  formActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+  },
+  lockedField: {
+    marginTop: 10,
+  },
+  lockedFieldText: {
+    backgroundColor: '#eef4f0',
+    borderColor: '#d6e1dc',
+    borderRadius: 11,
+    borderWidth: 1,
+    color: '#12643d',
+    fontSize: 15,
+    fontWeight: '900',
+    minHeight: 48,
+    paddingHorizontal: 12,
+    paddingTop: 14,
   },
   section: {
     backgroundColor: '#ffffff',
