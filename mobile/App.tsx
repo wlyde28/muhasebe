@@ -55,6 +55,7 @@ type DeletedRecord = {
   deletedAt: string;
   source: string;
   rowNumber: number;
+  originalRowNumber?: number;
   recordType: string;
   customer: string;
   description: string;
@@ -79,6 +80,7 @@ type PartnerSummary = {
   youOwePartner: number;
   net: number;
   openItems: PartnerExpense[];
+  closedItems: PartnerExpense[];
 };
 
 type AccountingSummary = {
@@ -110,7 +112,17 @@ type FormState = {
   paymentStatus: PaymentStatus;
   sharedExpense: 'Hayır' | 'Evet';
   expensePayer: 'Durukan' | 'Şirin';
+  date: string;
 };
+
+type FilterState = {
+  query: string;
+  startDate: string;
+  endDate: string;
+};
+
+const EMPLOYEES = ['Durukan', 'Şirin'] as const;
+type EmployeeName = (typeof EMPLOYEES)[number];
 
 type ReceivableEditState = {
   rowNumber: number;
@@ -139,6 +151,7 @@ const initialForm: FormState = {
   paymentStatus: 'Tahsil Edilmedi',
   sharedExpense: 'Hayır',
   expensePayer: 'Durukan',
+  date: todayInput(),
 };
 
 const entryConfig: Record<EntryPage, { title: string; subtitle: string; action: string; recordType: RecordType }> = {
@@ -182,6 +195,54 @@ function percent(part: number, total: number) {
   return Math.round((part / total) * 100);
 }
 
+function todayInput() {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Istanbul',
+  }).format(new Date());
+}
+
+function parseDateValue(value?: string) {
+  if (!value) return 0;
+
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (iso) {
+    return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime();
+  }
+
+  const tr = value.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+
+  if (tr) {
+    return new Date(Number(tr[3]), Number(tr[2]) - 1, Number(tr[1])).getTime();
+  }
+
+  return 0;
+}
+
+function monthKey(value?: string) {
+  const tr = value?.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  const iso = value?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (tr) return `${tr[3]}-${tr[2]}`;
+  if (iso) return `${iso[1]}-${iso[2]}`;
+
+  return '';
+}
+
+function matchesFilter(record: { date?: string; customer?: string; job?: string; description?: string; category?: string; type?: string; paymentType?: string }, filters: FilterState) {
+  const haystack = [record.customer, record.job, record.description, record.category, record.type, record.paymentType].join(' ').toLocaleLowerCase('tr-TR');
+  const query = filters.query.trim().toLocaleLowerCase('tr-TR');
+  const recordTime = parseDateValue(record.date);
+  const startTime = parseDateValue(filters.startDate);
+  const endTime = parseDateValue(filters.endDate);
+
+  if (query && !haystack.includes(query)) return false;
+  if (startTime && recordTime && recordTime < startTime) return false;
+  if (endTime && recordTime && recordTime > endTime) return false;
+
+  return true;
+}
+
 function parseAmount(value: string) {
   return Number(value.replace(/\./g, '').replace(',', '.'));
 }
@@ -195,6 +256,10 @@ export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
   const [activePage, setActivePage] = useState<PageKey>('summary');
   const [form, setForm] = useState<FormState>(initialForm);
+  const [currentEmployee, setCurrentEmployee] = useState<EmployeeName | null>(null);
+  const [loginEmployee, setLoginEmployee] = useState<EmployeeName>('Durukan');
+  const [pinInput, setPinInput] = useState('');
+  const [filters, setFilters] = useState<FilterState>({ query: '', startDate: '', endDate: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -210,66 +275,74 @@ export default function App() {
     () =>
       summary?.receivables
         .filter((record) => record.customer && record.amount > 0 && record.status !== 'Tahsil Edildi')
+        .filter((record) => matchesFilter(record, filters))
         .slice(0, 12) ?? [],
-    [summary],
+    [summary, filters],
   );
   const collectedReceivables = useMemo(
     () =>
       summary?.receivables
         .filter((record) => record.customer && record.amount > 0 && record.status === 'Tahsil Edildi')
+        .filter((record) => matchesFilter(record, filters))
         .slice(0, 24)
         .reverse() ?? [],
-    [summary],
+    [summary, filters],
   );
   const incomeTransactions = useMemo(
     () =>
       summary?.transactions
         .filter((record) => record.type === 'Gelir' && record.amount > 0 && !isKaplanRecord(record))
+        .filter((record) => matchesFilter(record, filters))
         .slice(-10)
         .reverse() ?? [],
-    [summary],
+    [summary, filters],
   );
   const expenseTransactions = useMemo(
     () =>
       summary?.transactions
         .filter((record) => record.type === 'Gider' && record.amount > 0 && !isKaplanRecord(record))
+        .filter((record) => matchesFilter(record, filters))
         .slice(-10)
         .reverse() ?? [],
-    [summary],
+    [summary, filters],
   );
   const kaplanIncomeTransactions = useMemo(
     () =>
       summary?.transactions
         .filter((record) => record.type === 'Gelir' && record.amount > 0 && isKaplanRecord(record))
+        .filter((record) => matchesFilter(record, filters))
         .slice(-10)
         .reverse() ?? [],
-    [summary],
+    [summary, filters],
   );
   const kaplanExpenseTransactions = useMemo(
     () =>
       summary?.transactions
         .filter((record) => record.type === 'Gider' && record.amount > 0 && isKaplanRecord(record))
+        .filter((record) => matchesFilter(record, filters))
         .slice(-10)
         .reverse() ?? [],
-    [summary],
+    [summary, filters],
   );
   const recentTransactions = useMemo(
     () =>
       summary?.transactions
         .filter((record) => record.date && record.type && record.amount > 0)
+        .filter((record) => matchesFilter(record, filters))
         .slice(-8)
         .reverse() ?? [],
-    [summary],
+    [summary, filters],
   );
-  const recentAppRecords = useMemo(() => summary?.appRecords.slice(-6).reverse() ?? [], [summary]);
+  const recentAppRecords = useMemo(() => summary?.appRecords.filter((record) => matchesFilter(record, filters)).slice(-6).reverse() ?? [], [summary, filters]);
   const deletedRecords = useMemo(() => summary?.deletedRecords.slice(-30).reverse() ?? [], [summary]);
   const kaplanOpenReceivables = useMemo(
     () =>
       summary?.receivables
         .filter((record) => record.amount > 0 && record.status !== 'Tahsil Edildi' && record.job.includes('Kaplan Teknik'))
+        .filter((record) => matchesFilter(record, filters))
         .slice(0, 10)
         .reverse() ?? [],
-    [summary],
+    [summary, filters],
   );
 
   const loadSummary = useCallback(async () => {
@@ -293,8 +366,46 @@ export default function App() {
     loadSummary();
   }, [loadSummary]);
 
+  if (!currentEmployee) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <View style={styles.loginScreen}>
+          <View style={styles.loginCard}>
+            <Text style={styles.company}>Durukan Klima</Text>
+            <Text style={styles.loginTitle}>Muhasebe Girişi</Text>
+            <Segmented
+              label="Eleman"
+              value={loginEmployee}
+              options={EMPLOYEES.map((employee) => [employee, employee]) as [string, string][]}
+              onChange={(value) => setLoginEmployee(value as EmployeeName)}
+            />
+            <Input label="PIN" value={pinInput} onChangeText={setPinInput} placeholder="1234" keyboardType="number-pad" />
+            <Pressable style={styles.primaryButton} onPress={login}>
+              <Text style={styles.primaryButtonText}>Giriş Yap</Text>
+            </Pressable>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   function updateForm(key: keyof FormState, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateFilters(key: keyof FilterState, value: string) {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function login() {
+    if (APP_PIN && pinInput.trim() !== APP_PIN) {
+      Alert.alert('PIN hatalı', 'Lütfen uygulama PIN kodunu kontrol et.');
+      return;
+    }
+
+    setCurrentEmployee(loginEmployee);
+    setForm((current) => ({ ...current, employee: loginEmployee }));
   }
 
   function defaultCategory(page: EntryPage) {
@@ -311,6 +422,7 @@ export default function App() {
       paymentType: current.paymentType,
       category: defaultCategory(page),
       paymentStatus: page === 'income' ? 'Tahsil Edilmedi' : 'Tahsil Edildi',
+      date: todayInput(),
     }));
   }
 
@@ -359,9 +471,10 @@ export default function App() {
           jobType: category,
           description: form.description,
           amount: numericAmount,
+          date: form.date,
           paymentStatus: entryPage === 'income' || entryPage === 'kaplanIncome' ? form.paymentStatus : 'Tahsil Edildi',
           paymentType: form.paymentType,
-          employee: form.employee,
+          employee: currentEmployee ?? form.employee,
           note: [
             kaplan ? 'Kaplan Teknik' : '',
             (entryPage === 'expense' || entryPage === 'kaplanExpense') && form.sharedExpense === 'Evet'
@@ -694,6 +807,48 @@ export default function App() {
     }
   }
 
+  function confirmRestoreDeleted(record: DeletedRecord) {
+    Alert.alert(
+      'Kayıt geri yüklensin mi?',
+      `${record.description || record.customer || record.recordType} yeniden ilgili tabloya eklenecek.`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        { text: 'Geri Yükle', onPress: () => restoreDeleted(record) },
+      ],
+    );
+  }
+
+  async function restoreDeleted(record: DeletedRecord) {
+    if (!record.rowNumber) {
+      Alert.alert('Satır bulunamadı', 'Silinen kayıt satırı belirlenemedi.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const response = await fetch(API_URL, {
+        method: 'PATCH',
+        headers: requestHeaders,
+        body: JSON.stringify({
+          action: 'restore_deleted',
+          deletedRowNumber: record.rowNumber,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? body.error ?? 'Kayıt geri yüklenemedi');
+      }
+
+      await loadSummary();
+      Alert.alert('Geri yüklendi', 'Kayıt ilgili tabloya yeniden eklendi.');
+    } catch (caught) {
+      Alert.alert('Geri yüklenemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -702,7 +857,7 @@ export default function App() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSummary} tintColor="#ffffff" />}
       >
         <View style={styles.hero}>
-          <Text style={styles.company}>Durukan Klima</Text>
+          <Text style={styles.company}>Durukan Klima · {currentEmployee}</Text>
           <Text style={styles.title}>Muhasebe</Text>
           <View style={styles.heroFooter}>
             <SummaryPill label="Net Kar" value={currency(summary?.totals.net ?? 0)} />
@@ -730,6 +885,8 @@ export default function App() {
           <PageTab active={activePage === 'partner'} label="Ortak Hesabı" onPress={() => switchPage('partner')} />
           <PageTab active={activePage === 'deleted'} label="Silinenler" onPress={() => switchPage('deleted')} />
         </View>
+
+        <FilterPanel filters={filters} onChange={updateFilters} onClear={() => setFilters({ query: '', startDate: '', endDate: '' })} />
 
         {activePage === 'summary' ? (
           <SummaryPage
@@ -818,7 +975,7 @@ export default function App() {
         ) : null}
 
         {activePage === 'deleted' ? (
-          <DeletedPage records={deletedRecords} />
+          <DeletedPage records={deletedRecords} saving={saving} onRestore={confirmRestoreDeleted} />
         ) : null}
       </ScrollView>
     </SafeAreaView>
@@ -844,6 +1001,24 @@ function SummaryPage({
   const chartTotal = collectedTotal + expensesTotal;
   const incomePercent = percent(collectedTotal, chartTotal);
   const expensePercent = percent(expensesTotal, chartTotal);
+  const currentMonth = monthKey(todayInput());
+  const monthlyIncome =
+    summary?.transactions
+      .filter((record) => record.type === 'Gelir' && monthKey(record.date) === currentMonth)
+      .reduce((sum, record) => sum + record.amount, 0) ?? 0;
+  const monthlyExpenses =
+    summary?.transactions
+      .filter((record) => record.type === 'Gider' && monthKey(record.date) === currentMonth)
+      .reduce((sum, record) => sum + record.amount, 0) ?? 0;
+  const employeeRows = EMPLOYEES.map((employee) => {
+    const records = summary?.appRecords.filter((record) => record.employee === employee) ?? [];
+
+    return {
+      employee,
+      count: records.length,
+      total: records.reduce((sum, record) => sum + record.amount, 0),
+    };
+  });
 
   return (
     <>
@@ -868,6 +1043,25 @@ function SummaryPage({
             <ChartLegendRow label="Gider" value={currency(expensesTotal)} percent={expensePercent} tone="red" />
           </View>
         </View>
+      </View>
+
+      <View style={styles.summaryGrid}>
+        <Metric label="Bu Ay Gelir" value={currency(monthlyIncome)} tone="green" />
+        <Metric label="Bu Ay Gider" value={currency(monthlyExpenses)} tone="red" />
+        <Metric label="Bu Ay Net" value={currency(monthlyIncome - monthlyExpenses)} tone="blue" />
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Personel Raporu</Text>
+        {employeeRows.map((row) => (
+          <ListRow
+            key={row.employee}
+            title={row.employee}
+            subtitle={`${row.count} uygulama kaydı`}
+            value={currency(row.total)}
+            tone={row.employee === 'Durukan' ? 'blue' : 'orange'}
+          />
+        ))}
       </View>
 
       <View style={styles.section}>
@@ -1102,7 +1296,15 @@ function CollectedPage({
   );
 }
 
-function DeletedPage({ records }: { records: DeletedRecord[] }) {
+function DeletedPage({
+  records,
+  saving,
+  onRestore,
+}: {
+  records: DeletedRecord[];
+  saving: boolean;
+  onRestore: (record: DeletedRecord) => void;
+}) {
   const total = records.reduce((sum, record) => sum + record.amount, 0);
 
   return (
@@ -1122,9 +1324,11 @@ function DeletedPage({ records }: { records: DeletedRecord[] }) {
           <ListRow
             key={`${record.deletedAt}-${record.source}-${record.rowNumber}-${index}`}
             title={record.description || record.customer || record.recordType}
-            subtitle={`${record.deletedAt} · ${record.source} · satır ${record.rowNumber}`}
+            subtitle={`${record.deletedAt} · ${record.source} · eski satır ${record.originalRowNumber ?? '-'}`}
             value={currency(record.amount)}
             tone="red"
+            actionLabel={saving ? '...' : 'Geri Yükle'}
+            onAction={() => onRestore(record)}
           />
         ))}
       </View>
@@ -1142,6 +1346,7 @@ function PartnerPage({
   onCloseExpense: (record: PartnerExpense) => void;
 }) {
   const openItems = partner?.openItems ?? [];
+  const closedItems = partner?.closedItems ?? [];
   const net = partner?.net ?? 0;
   const netText =
     net > 0
@@ -1181,6 +1386,20 @@ function PartnerPage({
           />
         ))}
       </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Kapalı Ortak Giderler</Text>
+        {closedItems.length === 0 ? <Text style={styles.empty}>Henüz kapalı ortak gider yok.</Text> : null}
+        {closedItems.slice(-12).reverse().map((item, index) => (
+          <ListRow
+            key={`closed-${item.rowNumber}-${item.description}-${index}`}
+            title={item.description}
+            subtitle={`${item.date} · ödeyen: ${item.payer} · kapandı`}
+            value={currency(item.amount)}
+            tone="blue"
+          />
+        ))}
+      </View>
     </>
   );
 }
@@ -1213,7 +1432,13 @@ function RecordForm({
         <Text style={styles.formBadge}>{form.paymentType}</Text>
       </View>
 
-      <Input label="Eleman" value={form.employee} onChangeText={(value) => onUpdateForm('employee', value)} placeholder="Örn. Ahmet" />
+      <Segmented
+        label="Eleman"
+        value={form.employee}
+        options={EMPLOYEES.map((employee) => [employee, employee]) as [string, string][]}
+        onChange={(value) => onUpdateForm('employee', value)}
+      />
+      <Input label="Tarih" value={form.date} onChangeText={(value) => onUpdateForm('date', value)} placeholder="YYYY-AA-GG" />
       {!expensePage ? (
         <>
           <Input label="Müşteri" value={form.customer} onChangeText={(value) => onUpdateForm('customer', value)} placeholder="Müşteri adı" />
@@ -1398,6 +1623,40 @@ function ChartLegendRow({
   );
 }
 
+function FilterPanel({
+  filters,
+  onChange,
+  onClear,
+}: {
+  filters: FilterState;
+  onChange: (key: keyof FilterState, value: string) => void;
+  onClear: () => void;
+}) {
+  const active = Boolean(filters.query || filters.startDate || filters.endDate);
+
+  return (
+    <View style={styles.filterPanel}>
+      <View style={styles.filterHeader}>
+        <Text style={styles.filterTitle}>Filtre</Text>
+        {active ? (
+          <Pressable onPress={onClear} hitSlop={8}>
+            <Text style={styles.inlineAction}>Temizle</Text>
+          </Pressable>
+        ) : null}
+      </View>
+      <Input label="Arama" value={filters.query} onChangeText={(value) => onChange('query', value)} placeholder="Müşteri, açıklama, ödeme türü" />
+      <View style={styles.filterDates}>
+        <View style={styles.filterDateInput}>
+          <Input label="Başlangıç" value={filters.startDate} onChangeText={(value) => onChange('startDate', value)} placeholder="YYYY-AA-GG" />
+        </View>
+        <View style={styles.filterDateInput}>
+          <Input label="Bitiş" value={filters.endDate} onChangeText={(value) => onChange('endDate', value)} placeholder="YYYY-AA-GG" />
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function PageTab({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
   return (
     <Pressable style={[styles.pageTab, active && styles.pageTabActive]} onPress={onPress}>
@@ -1516,6 +1775,25 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 34,
   },
+  loginScreen: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 18,
+  },
+  loginCard: {
+    backgroundColor: '#102820',
+    borderColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 18,
+  },
+  loginTitle: {
+    color: '#ffffff',
+    fontSize: 30,
+    fontWeight: '900',
+    letterSpacing: 0,
+    marginBottom: 14,
+  },
   hero: {
     backgroundColor: '#0e2a4f',
     borderRadius: 18,
@@ -1611,6 +1889,31 @@ const styles = StyleSheet.create({
   },
   pageTabTextActive: {
     color: '#11231b',
+  },
+  filterPanel: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5ece8',
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 12,
+    padding: 14,
+  },
+  filterHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  filterTitle: {
+    color: '#16231d',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  filterDates: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  filterDateInput: {
+    flex: 1,
   },
   summaryGrid: {
     flexDirection: 'row',

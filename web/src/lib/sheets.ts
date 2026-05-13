@@ -7,6 +7,7 @@ import type {
   DeletedRecord,
   PartnerExpense,
   PartnerSummary,
+  RestoreDeletedPayload,
   MarkReceivableCollectedPayload,
   RowActionPayload,
   TransactionRecord,
@@ -82,6 +83,7 @@ const sampleSummary: AccountingSummary = {
     youOwePartner: 0,
     net: 0,
     openItems: [],
+    closedItems: [],
   },
   generatedAt: new Date().toISOString(),
 };
@@ -255,10 +257,11 @@ function mapAppRecords(rows: string[][]): AppRecord[] {
 function mapDeletedRecords(rows: string[][]): DeletedRecord[] {
   return rows
     .slice(1)
-    .map((row) => ({
+    .map((row, index) => ({
       deletedAt: row[0] ?? "",
       source: row[1] ?? "",
-      rowNumber: parseAmount(row[2]),
+      rowNumber: index + 2,
+      originalRowNumber: parseAmount(row[2]),
       recordType: row[3] ?? "",
       customer: row[4] ?? "",
       description: row[5] ?? "",
@@ -292,10 +295,11 @@ function parsePartnerExpense(record: TransactionRecord): PartnerExpense | null {
 }
 
 function summarizePartner(transactions: TransactionRecord[]): PartnerSummary {
-  const openItems = transactions
+  const partnerItems = transactions
     .map(parsePartnerExpense)
-    .filter((item): item is PartnerExpense => Boolean(item))
-    .filter((item) => item.status === "Açık");
+    .filter((item): item is PartnerExpense => Boolean(item));
+  const openItems = partnerItems.filter((item) => item.status === "Açık");
+  const closedItems = partnerItems.filter((item) => item.status === "Kapandı");
   const youPaid = openItems.filter((item) => item.payer === "Durukan").reduce((sum, item) => sum + item.share, 0);
   const partnerPaid = openItems.filter((item) => item.payer === "Şirin").reduce((sum, item) => sum + item.share, 0);
   const net = youPaid - partnerPaid;
@@ -307,6 +311,7 @@ function summarizePartner(transactions: TransactionRecord[]): PartnerSummary {
     youOwePartner: Math.max(-net, 0),
     net,
     openItems,
+    closedItems,
   };
 }
 
@@ -317,6 +322,28 @@ function todayTr(): string {
     year: "numeric",
     timeZone: "Europe/Istanbul",
   }).format(new Date());
+}
+
+function normalizeDateInput(value: string | undefined): string {
+  const trimmed = value?.trim() ?? "";
+
+  if (!trimmed) {
+    return todayTr();
+  }
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (isoMatch) {
+    return `${isoMatch[3]}.${isoMatch[2]}.${isoMatch[1]}`;
+  }
+
+  const trMatch = trimmed.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+
+  if (trMatch) {
+    return trimmed;
+  }
+
+  throw new Error("Tarih GG.AA.YYYY veya YYYY-AA-GG formatında olmalı.");
 }
 
 function nowTr(): string {
@@ -423,6 +450,7 @@ function normalizePayload(payload: CreateRecordPayload): Required<CreateRecordPa
     paymentType: payload.paymentType?.trim() || "Belirtilmedi",
     note: payload.note?.trim() || "",
     employee: payload.employee?.trim() || "Saha",
+    date: normalizeDateInput(payload.date),
   };
 }
 
@@ -668,6 +696,76 @@ export async function closePartnerExpense(payload: RowActionPayload): Promise<Pa
   return { ...partnerExpense, status: "Kapandı" };
 }
 
+export async function restoreDeletedRecord(payload: RestoreDeletedPayload): Promise<void> {
+  if (!hasGoogleCredentials()) {
+    throw new Error("Google Sheets yazma işlemi için servis hesabı bilgileri gerekli.");
+  }
+
+  const deletedRowNumber = Number(payload.deletedRowNumber);
+
+  if (!Number.isInteger(deletedRowNumber) || deletedRowNumber < 2) {
+    throw new Error("Geri yüklenecek silinen kayıt satırı seçilmedi.");
+  }
+
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+  const sheets = await getSheetsClient();
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${SHEETS.deletedRecords}'!A${deletedRowNumber}:H${deletedRowNumber}`,
+  });
+  const row = response.data.values?.[0] ?? [];
+  const source = row[1] ?? "";
+  const recordType = row[3] ?? "";
+  const customer = row[4] ?? "";
+  const description = row[5] ?? "";
+  const amount = parseAmount(row[6]);
+  const paymentType = row[7] ?? "";
+
+  if (!source || amount <= 0) {
+    throw new Error("Silinen kayıt geri yükleme için yeterli bilgi taşımıyor.");
+  }
+
+  if (source === SHEETS.transactions) {
+    await appendTransactionRow(sheets, spreadsheetId, [
+      todayTr(),
+      recordType || "Gider",
+      "Geri Yüklenen",
+      description,
+      amount,
+      paymentType || "Belirtilmedi",
+    ]);
+    return;
+  }
+
+  if (source === SHEETS.receivables) {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `'${SHEETS.receivables}'!A:D`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[customer || "Genel", description || "Geri yüklenen tahsilat", amount, recordType || "Tahsil Edilmedi"]],
+      },
+    });
+    return;
+  }
+
+  if (source === SHEETS.appRecords) {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `'${SHEETS.appRecords}'!A:K`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[randomUUID(), todayTr(), customer || "Genel", "", recordType || "Geri Yüklenen", description, amount, "", paymentType, "Geri yüklendi", "Saha"]],
+      },
+    });
+    return;
+  }
+
+  throw new Error("Bu silinen kayıt türü geri yüklenemiyor.");
+}
+
 export async function createAccountingRecord(payload: CreateRecordPayload): Promise<AppRecord> {
   if (!hasGoogleCredentials()) {
     throw new Error("Google Sheets yazma işlemi için servis hesabı bilgileri gerekli.");
@@ -677,7 +775,7 @@ export async function createAccountingRecord(payload: CreateRecordPayload): Prom
   const sheets = await getSheetsClient();
   const record = normalizePayload(payload);
   const id = randomUUID();
-  const date = todayTr();
+  const date = record.date;
 
   const appRecord: AppRecord = {
     id,

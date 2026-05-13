@@ -56,6 +56,7 @@ export type DeletedRecord = {
   deletedAt: string;
   source: string;
   rowNumber: number;
+  originalRowNumber?: number;
   recordType: string;
   customer: string;
   description: string;
@@ -70,6 +71,7 @@ export type PartnerSummary = {
   youOwePartner: number;
   net: number;
   openItems: PartnerExpense[];
+  closedItems: PartnerExpense[];
 };
 
 export type PartnerExpense = {
@@ -93,6 +95,7 @@ export type CreateRecordPayload = {
   paymentType?: string;
   note?: string;
   employee?: string;
+  date?: string;
 };
 
 export type MarkReceivableCollectedPayload = {
@@ -117,6 +120,10 @@ export type UpdateReceivablePayload = {
   job?: string;
   amount?: number;
   status?: "Tahsil Edildi" | "Tahsil Edilmedi";
+};
+
+export type RestoreDeletedPayload = {
+  deletedRowNumber?: number;
 };
 
 export function parseAmount(value: unknown): number {

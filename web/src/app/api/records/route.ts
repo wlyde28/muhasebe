@@ -8,6 +8,7 @@ import {
   getAccountingSummary,
   markReceivableCollected,
   markReceivableUncollected,
+  restoreDeletedRecord,
   updateReceivable,
 } from "@/lib/sheets";
 
@@ -137,6 +138,11 @@ export async function PATCH(request: Request) {
     if (body.action === "close_partner_expense") {
       const record = await closePartnerExpense(body);
       return NextResponse.json({ record });
+    }
+
+    if (body.action === "restore_deleted") {
+      await restoreDeletedRecord(body);
+      return NextResponse.json({ ok: true });
     }
 
     return NextResponse.json({ error: "Bilinmeyen işlem." }, { status: 400 });
