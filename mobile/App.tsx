@@ -1510,14 +1510,14 @@ function ListRow({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#0f1d18',
+    backgroundColor: '#0b1f3a',
   },
   content: {
     padding: 16,
     paddingBottom: 34,
   },
   hero: {
-    backgroundColor: '#102820',
+    backgroundColor: '#0e2a4f',
     borderRadius: 18,
     borderColor: 'rgba(255,255,255,0.08)',
     borderWidth: 1,
@@ -1526,7 +1526,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   company: {
-    color: '#9ccbb7',
+    color: '#b8d7ff',
     fontSize: 14,
     fontWeight: '800',
     marginBottom: 8,
