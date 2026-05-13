@@ -2270,9 +2270,9 @@ const styles = StyleSheet.create({
   },
   loginLogo: {
     alignSelf: 'center',
-    height: 118,
-    marginBottom: 12,
-    width: 118,
+    height: 96,
+    marginBottom: 14,
+    width: 96,
   },
   loginTitle: {
     color: '#ffffff',
@@ -2296,8 +2296,8 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   heroLogo: {
-    height: 64,
-    width: 64,
+    height: 52,
+    width: 52,
   },
   company: {
     color: '#b8d7ff',
