@@ -13,6 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import Svg, { Circle, Path } from 'react-native-svg';
 
 type EntryPage = 'income' | 'expense' | 'kaplanIncome' | 'kaplanExpense';
 type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'partner' | 'deleted';
@@ -173,6 +174,12 @@ function currency(amount: number) {
     currency: 'TRY',
     maximumFractionDigits: 0,
   }).format(amount);
+}
+
+function percent(part: number, total: number) {
+  if (total <= 0) return 0;
+
+  return Math.round((part / total) * 100);
 }
 
 function parseAmount(value: string) {
@@ -832,14 +839,35 @@ function SummaryPage({
   onDeleteRecord: (id: string) => void;
 }) {
   const collectedTotal = collectedReceivables.reduce((sum, record) => sum + record.amount, 0);
-  const netProfit = collectedTotal - (summary?.totals.expenses ?? 0);
+  const expensesTotal = summary?.totals.expenses ?? 0;
+  const netProfit = collectedTotal - expensesTotal;
+  const chartTotal = collectedTotal + expensesTotal;
+  const incomePercent = percent(collectedTotal, chartTotal);
+  const expensePercent = percent(expensesTotal, chartTotal);
 
   return (
     <>
       <View style={styles.summaryGrid}>
         <Metric label="Net Kar" value={currency(netProfit)} tone="green" />
         <Metric label="Tahsil Edilmeyen" value={currency(summary?.totals.receivables ?? 0)} tone="orange" />
-        <Metric label="Gider" value={currency(summary?.totals.expenses ?? 0)} tone="red" />
+        <Metric label="Gider" value={currency(expensesTotal)} tone="red" />
+      </View>
+
+      <View style={styles.chartSection}>
+        <View style={styles.chartHeader}>
+          <View>
+            <Text style={styles.sectionTitleCompact}>Gelir / Gider Dağılımı</Text>
+            <Text style={styles.chartSubtitle}>Tahsil edilen gelir ve yapılan gider oranı</Text>
+          </View>
+          <Text style={[styles.chartNet, netProfit >= 0 ? styles.greenText : styles.redText]}>{currency(netProfit)}</Text>
+        </View>
+        <View style={styles.chartBody}>
+          <FinancePieChart income={collectedTotal} expenses={expensesTotal} />
+          <View style={styles.chartLegend}>
+            <ChartLegendRow label="Gelir" value={currency(collectedTotal)} percent={incomePercent} tone="green" />
+            <ChartLegendRow label="Gider" value={currency(expensesTotal)} percent={expensePercent} tone="red" />
+          </View>
+        </View>
       </View>
 
       <View style={styles.section}>
@@ -1289,6 +1317,87 @@ function Metric({ label, value, tone }: { label: string; value: string; tone: 'g
   );
 }
 
+function polarToCartesian(center: number, radius: number, angleInDegrees: number) {
+  const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180;
+
+  return {
+    x: center + radius * Math.cos(angleInRadians),
+    y: center + radius * Math.sin(angleInRadians),
+  };
+}
+
+function describeArc(center: number, radius: number, startAngle: number, endAngle: number) {
+  const start = polarToCartesian(center, radius, endAngle);
+  const end = polarToCartesian(center, radius, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+
+  return [`M ${center} ${center}`, `L ${start.x} ${start.y}`, `A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`, 'Z'].join(' ');
+}
+
+function FinancePieChart({ income, expenses }: { income: number; expenses: number }) {
+  const size = 148;
+  const center = size / 2;
+  const radius = 66;
+  const total = income + expenses;
+  const incomeAngle = total > 0 ? (income / total) * 360 : 0;
+
+  if (total <= 0) {
+    return (
+      <View style={styles.pieWrap}>
+        <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <Circle cx={center} cy={center} r={radius} fill="#edf2ef" />
+          <Circle cx={center} cy={center} r={38} fill="#ffffff" />
+        </Svg>
+        <View style={styles.pieCenter}>
+          <Text style={styles.piePercent}>0%</Text>
+          <Text style={styles.pieLabel}>veri yok</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.pieWrap}>
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <Circle cx={center} cy={center} r={radius} fill="#c4483c" />
+        {incomeAngle >= 359.99 ? (
+          <Circle cx={center} cy={center} r={radius} fill="#1f8b54" />
+        ) : incomeAngle > 0 ? (
+          <Path d={describeArc(center, radius, 0, incomeAngle)} fill="#1f8b54" />
+        ) : null}
+        <Circle cx={center} cy={center} r={42} fill="#ffffff" />
+      </Svg>
+      <View style={styles.pieCenter}>
+        <Text style={styles.piePercent}>{percent(income, total)}%</Text>
+        <Text style={styles.pieLabel}>gelir</Text>
+      </View>
+    </View>
+  );
+}
+
+function ChartLegendRow({
+  label,
+  value,
+  percent: ratio,
+  tone,
+}: {
+  label: string;
+  value: string;
+  percent: number;
+  tone: 'green' | 'red';
+}) {
+  return (
+    <View style={styles.legendRow}>
+      <View style={[styles.legendDot, styles[`${tone}Dot`]]} />
+      <View style={styles.legendText}>
+        <Text style={styles.legendLabel}>{label}</Text>
+        <Text style={styles.legendValue}>{value}</Text>
+      </View>
+      <Text style={[styles.legendPercent, styles[`${tone}Text`]]}>{ratio}%</Text>
+    </View>
+  );
+}
+
 function PageTab({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
   return (
     <Pressable style={[styles.pageTab, active && styles.pageTabActive]} onPress={onPress}>
@@ -1401,21 +1510,23 @@ function ListRow({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#11231b',
+    backgroundColor: '#0f1d18',
   },
   content: {
     padding: 16,
     paddingBottom: 34,
   },
   hero: {
-    backgroundColor: '#163426',
+    backgroundColor: '#102820',
     borderRadius: 18,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
     marginBottom: 14,
     overflow: 'hidden',
     padding: 20,
   },
   company: {
-    color: '#b8d8c8',
+    color: '#9ccbb7',
     fontSize: 14,
     fontWeight: '800',
     marginBottom: 8,
@@ -1429,12 +1540,12 @@ const styles = StyleSheet.create({
   heroFooter: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 18,
+    marginTop: 20,
   },
   summaryPill: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
     borderColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
     flex: 1,
     padding: 12,
@@ -1470,7 +1581,7 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   pageTabs: {
-    backgroundColor: '#dfeae4',
+    backgroundColor: '#e8eee9',
     borderRadius: 14,
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1480,7 +1591,7 @@ const styles = StyleSheet.create({
   },
   pageTab: {
     alignItems: 'center',
-    borderRadius: 10,
+    borderRadius: 9,
     flexGrow: 1,
     flexBasis: '30%',
     minHeight: 42,
@@ -1488,6 +1599,10 @@ const styles = StyleSheet.create({
   },
   pageTabActive: {
     backgroundColor: '#ffffff',
+    shadowColor: '#0c1813',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
   pageTabText: {
     color: '#52615b',
@@ -1503,8 +1618,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   metric: {
-    backgroundColor: '#f8fbf9',
-    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderColor: '#e7eee9',
+    borderRadius: 12,
+    borderWidth: 1,
     flex: 1,
     minHeight: 92,
     padding: 12,
@@ -1540,7 +1657,9 @@ const styles = StyleSheet.create({
   },
   formCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
+    borderColor: '#e5ece8',
+    borderRadius: 14,
+    borderWidth: 1,
     marginBottom: 12,
     padding: 14,
   },
@@ -1582,7 +1701,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   input: {
-    backgroundColor: '#f5f8f6',
+    backgroundColor: '#f7faf8',
     borderColor: '#d6e1dc',
     borderRadius: 11,
     borderWidth: 1,
@@ -1599,7 +1718,7 @@ const styles = StyleSheet.create({
   },
   segment: {
     alignItems: 'center',
-    backgroundColor: '#f5f8f6',
+    backgroundColor: '#f7faf8',
     borderColor: '#d6e1dc',
     borderRadius: 11,
     borderWidth: 1,
@@ -1690,10 +1809,114 @@ const styles = StyleSheet.create({
   },
   section: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
+    borderColor: '#e5ece8',
+    borderRadius: 14,
+    borderWidth: 1,
     marginBottom: 12,
     overflow: 'hidden',
     paddingTop: 14,
+  },
+  chartSection: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5ece8',
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 12,
+    padding: 14,
+  },
+  chartHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 14,
+  },
+  sectionTitleCompact: {
+    color: '#16231d',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  chartSubtitle: {
+    color: '#65736c',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    marginTop: 4,
+    maxWidth: 210,
+  },
+  chartNet: {
+    backgroundColor: '#f4f8f5',
+    borderRadius: 10,
+    fontSize: 13,
+    fontWeight: '900',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  chartBody: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 16,
+  },
+  pieWrap: {
+    alignItems: 'center',
+    height: 148,
+    justifyContent: 'center',
+    width: 148,
+  },
+  pieCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+  },
+  piePercent: {
+    color: '#16231d',
+    fontSize: 25,
+    fontWeight: '900',
+  },
+  pieLabel: {
+    color: '#65736c',
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  chartLegend: {
+    flex: 1,
+    gap: 10,
+  },
+  legendRow: {
+    alignItems: 'center',
+    backgroundColor: '#f7faf8',
+    borderColor: '#e5ece8',
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 58,
+    paddingHorizontal: 10,
+  },
+  legendDot: {
+    borderRadius: 5,
+    height: 10,
+    width: 10,
+  },
+  legendText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  legendLabel: {
+    color: '#65736c',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  legendValue: {
+    color: '#16231d',
+    fontSize: 14,
+    fontWeight: '900',
+    marginTop: 3,
+  },
+  legendPercent: {
+    fontSize: 15,
+    fontWeight: '900',
   },
   sectionTitle: {
     color: '#16231d',
