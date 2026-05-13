@@ -19,6 +19,7 @@ type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
 type WorkRecord = {
+  rowNumber?: number;
   customer: string;
   job: string;
   amount: number;
@@ -261,6 +262,53 @@ export default function App() {
     }
   }
 
+  function confirmMarkCollected(record: WorkRecord) {
+    Alert.alert(
+      'Tahsil edildi mi?',
+      `${record.customer} için ${currency(record.amount)} tahsil edildi olarak işlenecek.`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        {
+          text: 'Tahsil Edildi',
+          onPress: () => markCollected(record),
+        },
+      ],
+    );
+  }
+
+  async function markCollected(record: WorkRecord) {
+    if (!record.rowNumber) {
+      Alert.alert('Satır bulunamadı', 'Bu kaydın Google Sheets satırı belirlenemedi.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const response = await fetch(API_URL, {
+        method: 'PATCH',
+        headers: requestHeaders,
+        body: JSON.stringify({
+          action: 'mark_receivable_collected',
+          rowNumber: record.rowNumber,
+          paymentType: form.paymentType,
+          employee: form.employee,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? body.error ?? 'Tahsilat güncellenemedi');
+      }
+
+      await loadSummary();
+      Alert.alert('Güncellendi', `${record.customer} tahsil edildi olarak işlendi.`);
+    } catch (caught) {
+      Alert.alert('Güncellenemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -365,9 +413,10 @@ export default function App() {
             <ListRow
               key={`${record.customer}-${record.amount}-${record.job}`}
               title={record.customer}
-              subtitle={record.job}
+              subtitle={`${record.job} · dokun, tahsil edildi yap`}
               value={currency(record.amount)}
               tone="orange"
+              onPress={() => confirmMarkCollected(record)}
             />
           ))}
         </View>
@@ -493,14 +542,16 @@ function ListRow({
   subtitle,
   value,
   tone,
+  onPress,
 }: {
   title: string;
   subtitle: string;
   value: string;
   tone: 'green' | 'red' | 'blue' | 'orange';
+  onPress?: () => void;
 }) {
-  return (
-    <View style={styles.listRow}>
+  const content = (
+    <>
       <View style={[styles.rowMark, styles[`${tone}Mark`]]} />
       <View style={styles.rowText}>
         <Text style={styles.rowTitle} numberOfLines={1}>
@@ -511,6 +562,20 @@ function ListRow({
         </Text>
       </View>
       <Text style={[styles.rowValue, styles[`${tone}Text`]]}>{value}</Text>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable style={({ pressed }) => [styles.listRow, pressed && styles.rowPressed]} onPress={onPress}>
+        {content}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={styles.listRow}>
+      {content}
     </View>
   );
 }
@@ -772,6 +837,9 @@ const styles = StyleSheet.create({
     minHeight: 66,
     paddingHorizontal: 14,
     paddingVertical: 10,
+  },
+  rowPressed: {
+    backgroundColor: '#fff7ed',
   },
   rowMark: {
     borderRadius: 5,

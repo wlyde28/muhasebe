@@ -1,4 +1,5 @@
 export type WorkRecord = {
+  rowNumber?: number;
   customer: string;
   job: string;
   amount: number;
@@ -58,6 +59,12 @@ export type CreateRecordPayload = {
   paymentStatus?: "Tahsil Edildi" | "Tahsil Edilmedi";
   paymentType?: string;
   note?: string;
+  employee?: string;
+};
+
+export type MarkReceivableCollectedPayload = {
+  rowNumber?: number;
+  paymentType?: string;
   employee?: string;
 };
 

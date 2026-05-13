@@ -1,6 +1,13 @@
 import { google } from "googleapis";
 import { randomUUID } from "node:crypto";
-import type { AccountingSummary, AppRecord, CreateRecordPayload, TransactionRecord, WorkRecord } from "./accounting";
+import type {
+  AccountingSummary,
+  AppRecord,
+  CreateRecordPayload,
+  MarkReceivableCollectedPayload,
+  TransactionRecord,
+  WorkRecord,
+} from "./accounting";
 import { parseAmount } from "./accounting";
 
 const DEFAULT_SPREADSHEET_ID = "15kaSfdKd-L1pAQInHCZt9i2Ub-PjrZJFJw1hjusmhiw";
@@ -96,12 +103,16 @@ function mapJobs(rows: string[][]): WorkRecord[] {
 }
 
 function mapReceivables(rows: string[][]): WorkRecord[] {
-  return rows.slice(1).map((row) => ({
-    customer: row[0] ?? "",
-    job: row[1] ?? "",
-    amount: parseAmount(row[2]),
-    status: row[3] ?? "",
-  }));
+  return rows
+    .slice(1)
+    .map((row, index) => ({
+      rowNumber: index + 2,
+      customer: row[0] ?? "",
+      job: row[1] ?? "",
+      amount: parseAmount(row[2]),
+      status: row[3] ?? "",
+    }))
+    .filter((row) => row.customer || row.job || row.amount || row.status);
 }
 
 function mapTransactions(rows: string[][]): TransactionRecord[] {
@@ -180,7 +191,7 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
 
   const [jobsRange, receivablesRange, transactionsRange, appRecordsRange] = response.data.valueRanges ?? [];
   const jobs = mapJobs(rowsFromRange(jobsRange?.values as string[][] | undefined));
-  const receivables = mapReceivables(rowsFromRange(receivablesRange?.values as string[][] | undefined));
+  const receivables = mapReceivables((receivablesRange?.values as string[][] | undefined) ?? []);
   const transactions = mapTransactions(rowsFromRange(transactionsRange?.values as string[][] | undefined));
   const appRecords = mapAppRecords(rowsFromRange(appRecordsRange?.values as string[][] | undefined));
 
@@ -214,6 +225,66 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
     appRecords,
     generatedAt: new Date().toISOString(),
   };
+}
+
+export async function markReceivableCollected(payload: MarkReceivableCollectedPayload): Promise<WorkRecord> {
+  if (!hasGoogleCredentials()) {
+    throw new Error("Google Sheets düzenleme işlemi için servis hesabı bilgileri gerekli.");
+  }
+
+  const rowNumber = Number(payload.rowNumber);
+
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    throw new Error("Geçerli bir tahsilat satırı seçilmedi.");
+  }
+
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+  const sheets = await getSheetsClient();
+  const rowRange = `'${SHEETS.receivables}'!A${rowNumber}:D${rowNumber}`;
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: rowRange,
+  });
+  const row = response.data.values?.[0] ?? [];
+  const record: WorkRecord = {
+    rowNumber,
+    customer: row[0] ?? "",
+    job: row[1] ?? "",
+    amount: parseAmount(row[2]),
+    status: row[3] ?? "",
+  };
+
+  if (!record.customer || !record.job || record.amount <= 0) {
+    throw new Error("Seçilen tahsilat satırı geçerli bir kayıt değil.");
+  }
+
+  if (record.status?.toLocaleLowerCase("tr-TR") === "tahsil edildi") {
+    throw new Error("Bu kayıt zaten tahsil edildi görünüyor.");
+  }
+
+  const date = todayTr();
+  const paymentType = payload.paymentType?.trim() || "Nakit";
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${SHEETS.receivables}'!D${rowNumber}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [["Tahsil Edildi"]],
+    },
+  });
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${SHEETS.transactions}!A:F`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: {
+      values: [[date, "Gelir", "Tahsilat", `${record.customer} - ${record.job}`, record.amount, paymentType]],
+    },
+  });
+
+  return { ...record, status: "Tahsil Edildi" };
 }
 
 export async function createAccountingRecord(payload: CreateRecordPayload): Promise<AppRecord> {

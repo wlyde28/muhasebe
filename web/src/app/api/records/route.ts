@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createAccountingRecord, deleteAppRecord, getAccountingSummary } from "@/lib/sheets";
+import { createAccountingRecord, deleteAppRecord, getAccountingSummary, markReceivableCollected } from "@/lib/sheets";
 
 function checkPin(request: Request): NextResponse | null {
   const expectedPin = String(process.env.APP_SHARED_PIN ?? "").replace(/^\uFEFF/, "").trim();
@@ -71,6 +71,33 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       {
         error: "Kayıt silinemedi.",
+        detail: error instanceof Error ? error.message : "Bilinmeyen hata",
+      },
+      { status: 400 },
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  const pinError = checkPin(request);
+
+  if (pinError) {
+    return pinError;
+  }
+
+  try {
+    const body = await request.json();
+
+    if (body.action !== "mark_receivable_collected") {
+      return NextResponse.json({ error: "Bilinmeyen işlem." }, { status: 400 });
+    }
+
+    const record = await markReceivableCollected(body);
+    return NextResponse.json({ record });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: "Tahsilat güncellenemedi.",
         detail: error instanceof Error ? error.message : "Bilinmeyen hata",
       },
       { status: 400 },
