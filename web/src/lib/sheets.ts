@@ -4,6 +4,7 @@ import type {
   AccountingSummary,
   AppRecord,
   CreateRecordPayload,
+  DeletedRecord,
   MarkReceivableCollectedPayload,
   RowActionPayload,
   TransactionRecord,
@@ -19,6 +20,7 @@ const SHEETS = {
   jobs: "Kaplan Teknik",
   receivables: "Tahsilat Takibi",
   appRecords: "App Kayıtları",
+  deletedRecords: "Silinen Kayıtlar",
 };
 
 function cleanEnv(value: string | undefined): string {
@@ -70,6 +72,7 @@ const sampleSummary: AccountingSummary = {
     },
   ],
   appRecords: [],
+  deletedRecords: [],
   generatedAt: new Date().toISOString(),
 };
 
@@ -148,6 +151,19 @@ function mapAppRecords(rows: string[][]): AppRecord[] {
   }));
 }
 
+function mapDeletedRecords(rows: string[][]): DeletedRecord[] {
+  return rows.slice(1).map((row) => ({
+    deletedAt: row[0] ?? "",
+    source: row[1] ?? "",
+    rowNumber: parseAmount(row[2]),
+    recordType: row[3] ?? "",
+    customer: row[4] ?? "",
+    description: row[5] ?? "",
+    amount: parseAmount(row[6]),
+    paymentType: row[7] ?? "",
+  }));
+}
+
 function todayTr(): string {
   return new Intl.DateTimeFormat("tr-TR", {
     day: "2-digit",
@@ -155,6 +171,67 @@ function todayTr(): string {
     year: "numeric",
     timeZone: "Europe/Istanbul",
   }).format(new Date());
+}
+
+function nowTr(): string {
+  return new Intl.DateTimeFormat("tr-TR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Istanbul",
+  }).format(new Date());
+}
+
+async function ensureDeletedSheet(
+  sheets: Awaited<ReturnType<typeof getSheetsClient>>,
+  spreadsheetId: string,
+): Promise<void> {
+  const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+  const exists = metadata.data.sheets?.some((sheet) => sheet.properties?.title === SHEETS.deletedRecords);
+
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: SHEETS.deletedRecords,
+              },
+            },
+          },
+        ],
+      },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${SHEETS.deletedRecords}'!A1:H1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [["Silinme Tarihi", "Kaynak", "Satır", "Tür", "Müşteri", "Açıklama", "Tutar", "Ödeme Türü"]],
+      },
+    });
+  }
+}
+
+async function logDeletedRecord(
+  sheets: Awaited<ReturnType<typeof getSheetsClient>>,
+  spreadsheetId: string,
+  values: (string | number)[],
+): Promise<void> {
+  await ensureDeletedSheet(sheets, spreadsheetId);
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${SHEETS.deletedRecords}'!A:H`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: {
+      values: [values],
+    },
+  });
 }
 
 function normalizePayload(payload: CreateRecordPayload): Required<CreateRecordPayload> {
@@ -190,16 +267,25 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
   }
 
   const sheets = await getSheetsClient();
+  await ensureDeletedSheet(sheets, spreadsheetId);
   const response = await sheets.spreadsheets.values.batchGet({
     spreadsheetId,
-    ranges: ["'Kaplan Teknik'!A1:D500", "'Tahsilat Takibi'!A1:D500", "Sheet1!A1:F500", "'App Kayıtları'!A1:K500"],
+    ranges: [
+      "'Kaplan Teknik'!A1:D500",
+      "'Tahsilat Takibi'!A1:D500",
+      "Sheet1!A1:F500",
+      "'App Kayıtları'!A1:K500",
+      "'Silinen Kayıtlar'!A1:H500",
+    ],
   });
 
-  const [jobsRange, receivablesRange, transactionsRange, appRecordsRange] = response.data.valueRanges ?? [];
+  const [jobsRange, receivablesRange, transactionsRange, appRecordsRange, deletedRecordsRange] =
+    response.data.valueRanges ?? [];
   const jobs = mapJobs(rowsFromRange(jobsRange?.values as string[][] | undefined));
   const receivables = mapReceivables((receivablesRange?.values as string[][] | undefined) ?? []);
   const transactions = mapTransactions(rowsFromRange(transactionsRange?.values as string[][] | undefined));
   const appRecords = mapAppRecords(rowsFromRange(appRecordsRange?.values as string[][] | undefined));
+  const deletedRecords = mapDeletedRecords(rowsFromRange(deletedRecordsRange?.values as string[][] | undefined));
 
   const income = transactions
     .filter((record) => record.type.toLocaleLowerCase("tr-TR") === "gelir")
@@ -229,6 +315,7 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
     receivables,
     transactions,
     appRecords,
+    deletedRecords,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -492,13 +579,25 @@ export async function deleteAppRecord(id: string): Promise<void> {
 
   const rows = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `'${SHEETS.appRecords}'!A:A`,
+    range: `'${SHEETS.appRecords}'!A:K`,
   });
   const rowIndex = rows.data.values?.findIndex((row) => row[0] === id) ?? -1;
 
   if (rowIndex <= 0) {
     throw new Error("Silinecek kayıt bulunamadı.");
   }
+
+  const row = rows.data.values?.[rowIndex] ?? [];
+  await logDeletedRecord(sheets, spreadsheetId, [
+    nowTr(),
+    SHEETS.appRecords,
+    rowIndex + 1,
+    row[4] ?? "Uygulama Kaydı",
+    row[2] ?? "",
+    row[5] ?? "",
+    parseAmount(row[6]),
+    row[8] ?? "",
+  ]);
 
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
@@ -532,6 +631,16 @@ export async function deleteTransactionRow(payload: RowActionPayload): Promise<v
 
   const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
   const sheets = await getSheetsClient();
+  const rowValues = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${SHEETS.transactions}!A${rowNumber}:F${rowNumber}`,
+  });
+  const row = rowValues.data.values?.[0] ?? [];
+
+  if (!row.some((cell) => String(cell ?? "").trim())) {
+    throw new Error("Silinecek hareket satırı bulunamadı.");
+  }
+
   const metadata = await sheets.spreadsheets.get({ spreadsheetId });
   const transactionSheet = metadata.data.sheets?.find((sheet) => sheet.properties?.title === SHEETS.transactions);
   const sheetId = transactionSheet?.properties?.sheetId;
@@ -539,6 +648,17 @@ export async function deleteTransactionRow(payload: RowActionPayload): Promise<v
   if (sheetId === undefined) {
     throw new Error("Gelir gider sekmesi bulunamadı.");
   }
+
+  await logDeletedRecord(sheets, spreadsheetId, [
+    nowTr(),
+    SHEETS.transactions,
+    rowNumber,
+    row[1] ?? "",
+    "",
+    row[3] || row[2] || "",
+    parseAmount(row[4]),
+    row[5] ?? "",
+  ]);
 
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,

@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 
 type EntryPage = 'income' | 'expense' | 'kaplanIncome' | 'kaplanExpense';
-type PageKey = 'summary' | EntryPage | 'collection' | 'collected';
+type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'deleted';
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
@@ -50,6 +50,17 @@ type AppRecord = {
   employee: string;
 };
 
+type DeletedRecord = {
+  deletedAt: string;
+  source: string;
+  rowNumber: number;
+  recordType: string;
+  customer: string;
+  description: string;
+  amount: number;
+  paymentType: string;
+};
+
 type AccountingSummary = {
   configured: boolean;
   totals: {
@@ -64,6 +75,7 @@ type AccountingSummary = {
   receivables: WorkRecord[];
   transactions: TransactionRecord[];
   appRecords: AppRecord[];
+  deletedRecords: DeletedRecord[];
 };
 
 type FormState = {
@@ -219,6 +231,7 @@ export default function App() {
     [summary],
   );
   const recentAppRecords = useMemo(() => summary?.appRecords.slice(-6).reverse() ?? [], [summary]);
+  const deletedRecords = useMemo(() => summary?.deletedRecords.slice(-30).reverse() ?? [], [summary]);
   const kaplanOpenReceivables = useMemo(
     () =>
       summary?.receivables
@@ -582,6 +595,7 @@ export default function App() {
           <PageTab active={activePage === 'kaplanExpense'} label="Kaplan Gider" onPress={() => switchPage('kaplanExpense')} />
           <PageTab active={activePage === 'collection'} label="Tahsilat" onPress={() => switchPage('collection')} />
           <PageTab active={activePage === 'collected'} label="Tahsil Edilen" onPress={() => switchPage('collected')} />
+          <PageTab active={activePage === 'deleted'} label="Silinenler" onPress={() => switchPage('deleted')} />
         </View>
 
         {activePage === 'summary' ? (
@@ -663,6 +677,10 @@ export default function App() {
 
         {activePage === 'collected' ? (
           <CollectedPage receivables={collectedReceivables} onMarkUncollected={confirmMarkUncollected} />
+        ) : null}
+
+        {activePage === 'deleted' ? (
+          <DeletedPage records={deletedRecords} />
         ) : null}
       </ScrollView>
     </SafeAreaView>
@@ -913,6 +931,36 @@ function CollectedPage({
             tone="green"
             actionLabel="Geri Aç"
             onAction={() => onMarkUncollected(record)}
+          />
+        ))}
+      </View>
+    </>
+  );
+}
+
+function DeletedPage({ records }: { records: DeletedRecord[] }) {
+  const total = records.reduce((sum, record) => sum + record.amount, 0);
+
+  return (
+    <>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Silinen Kayıt Toplamı</Text>
+        <View style={styles.totalBand}>
+          <Text style={styles.totalBandLabel}>Son silinen kayıtların toplamı</Text>
+          <Text style={[styles.totalBandValue, styles.redText]}>{currency(total)}</Text>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Silinenler</Text>
+        {records.length === 0 ? <Text style={styles.empty}>Henüz silinen kayıt yok.</Text> : null}
+        {records.map((record, index) => (
+          <ListRow
+            key={`${record.deletedAt}-${record.source}-${record.rowNumber}-${index}`}
+            title={record.description || record.customer || record.recordType}
+            subtitle={`${record.deletedAt} · ${record.source} · satır ${record.rowNumber}`}
+            value={currency(record.amount)}
+            tone="red"
           />
         ))}
       </View>

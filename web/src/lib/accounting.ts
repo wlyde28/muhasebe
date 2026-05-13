@@ -33,6 +33,7 @@ export type AccountingSummary = {
   receivables: WorkRecord[];
   transactions: TransactionRecord[];
   appRecords: AppRecord[];
+  deletedRecords: DeletedRecord[];
   generatedAt: string;
 };
 
@@ -48,6 +49,17 @@ export type AppRecord = {
   paymentType: string;
   note: string;
   employee: string;
+};
+
+export type DeletedRecord = {
+  deletedAt: string;
+  source: string;
+  rowNumber: number;
+  recordType: string;
+  customer: string;
+  description: string;
+  amount: number;
+  paymentType: string;
 };
 
 export type CreateRecordPayload = {
