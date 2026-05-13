@@ -715,3 +715,64 @@ export async function deleteTransactionRow(payload: RowActionPayload): Promise<v
     },
   });
 }
+
+export async function deleteReceivableRow(payload: RowActionPayload): Promise<void> {
+  if (!hasGoogleCredentials()) {
+    throw new Error("Google Sheets silme işlemi için servis hesabı bilgileri gerekli.");
+  }
+
+  const rowNumber = Number(payload.rowNumber);
+
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    throw new Error("Silinecek tahsilat satırı seçilmedi.");
+  }
+
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+  const sheets = await getSheetsClient();
+  const rowValues = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${SHEETS.receivables}'!A${rowNumber}:D${rowNumber}`,
+  });
+  const row = rowValues.data.values?.[0] ?? [];
+
+  if (!row.some((cell) => String(cell ?? "").trim())) {
+    throw new Error("Silinecek tahsilat satırı bulunamadı.");
+  }
+
+  const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+  const receivableSheet = metadata.data.sheets?.find((sheet) => sheet.properties?.title === SHEETS.receivables);
+  const sheetId = receivableSheet?.properties?.sheetId;
+
+  if (sheetId === undefined) {
+    throw new Error("Tahsilat sekmesi bulunamadı.");
+  }
+
+  await logDeletedRecord(sheets, spreadsheetId, [
+    nowTr(),
+    SHEETS.receivables,
+    rowNumber,
+    row[3] ?? "Tahsilat",
+    row[0] ?? "",
+    row[1] ?? "",
+    parseAmount(row[2]),
+    "",
+  ]);
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          deleteDimension: {
+            range: {
+              sheetId,
+              dimension: "ROWS",
+              startIndex: rowNumber - 1,
+              endIndex: rowNumber,
+            },
+          },
+        },
+      ],
+    },
+  });
+}

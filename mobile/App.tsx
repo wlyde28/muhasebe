@@ -562,6 +562,44 @@ export default function App() {
     }
   }
 
+  function confirmDeleteReceivable() {
+    if (!editingReceivable) return;
+
+    Alert.alert(
+      'Tahsilat silinsin mi?',
+      `${editingReceivable.customer} kaydı silinecek ve Silinenler sayfasına işlenecek.`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        { text: 'Sil', style: 'destructive', onPress: deleteReceivableEdit },
+      ],
+    );
+  }
+
+  async function deleteReceivableEdit() {
+    if (!editingReceivable) return;
+
+    try {
+      setSaving(true);
+      const response = await fetch(`${API_URL}?type=receivable&rowNumber=${editingReceivable.rowNumber}`, {
+        method: 'DELETE',
+        headers: requestHeaders,
+      });
+
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? body.error ?? 'Tahsilat silinemedi');
+      }
+
+      setEditingReceivable(null);
+      await loadSummary();
+      Alert.alert('Silindi', 'Tahsilat kaydı silindi ve loglandı.');
+    } catch (caught) {
+      Alert.alert('Silinemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -672,6 +710,7 @@ export default function App() {
             onCancelEdit={() => setEditingReceivable(null)}
             onUpdateEdit={updateReceivableEdit}
             onSaveEdit={saveReceivableEdit}
+            onDeleteEdit={confirmDeleteReceivable}
           />
         ) : null}
 
@@ -820,6 +859,7 @@ function CollectionPage({
   onCancelEdit,
   onUpdateEdit,
   onSaveEdit,
+  onDeleteEdit,
 }: {
   receivables: WorkRecord[];
   onMarkCollected: (record: WorkRecord) => void;
@@ -829,6 +869,7 @@ function CollectionPage({
   onCancelEdit: () => void;
   onUpdateEdit: (key: keyof ReceivableEditState, value: string) => void;
   onSaveEdit: () => void;
+  onDeleteEdit: () => void;
 }) {
   return (
     <>
@@ -870,6 +911,9 @@ function CollectionPage({
             onChange={(value) => onUpdateEdit('status', value)}
           />
           <View style={styles.formActions}>
+            <Pressable style={styles.dangerButton} onPress={onDeleteEdit} disabled={saving}>
+              <Text style={styles.dangerButtonText}>Sil</Text>
+            </Pressable>
             <Pressable style={styles.secondaryButton} onPress={onCancelEdit} disabled={saving}>
               <Text style={styles.secondaryButtonText}>Vazgeç</Text>
             </Pressable>
@@ -1438,6 +1482,19 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     color: '#52615b',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  dangerButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffe8e4',
+    borderRadius: 12,
+    flex: 1,
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  dangerButtonText: {
+    color: '#b33128',
     fontSize: 15,
     fontWeight: '900',
   },

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   createAccountingRecord,
   deleteAppRecord,
+  deleteReceivableRow,
   deleteTransactionRow,
   getAccountingSummary,
   markReceivableCollected,
@@ -74,6 +75,11 @@ export async function DELETE(request: Request) {
 
     if (type === "transaction") {
       await deleteTransactionRow({ rowNumber: Number(rowNumber) });
+      return NextResponse.json({ ok: true });
+    }
+
+    if (type === "receivable") {
+      await deleteReceivableRow({ rowNumber: Number(rowNumber) });
       return NextResponse.json({ ok: true });
     }
 
