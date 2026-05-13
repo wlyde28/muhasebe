@@ -5,6 +5,8 @@ import type {
   AppRecord,
   CreateRecordPayload,
   DeletedRecord,
+  PartnerExpense,
+  PartnerSummary,
   MarkReceivableCollectedPayload,
   RowActionPayload,
   TransactionRecord,
@@ -73,6 +75,14 @@ const sampleSummary: AccountingSummary = {
   ],
   appRecords: [],
   deletedRecords: [],
+  partner: {
+    youPaid: 0,
+    partnerPaid: 0,
+    partnerOwesYou: 0,
+    youOwePartner: 0,
+    net: 0,
+    openItems: [],
+  },
   generatedAt: new Date().toISOString(),
 };
 
@@ -167,6 +177,47 @@ function mapDeletedRecords(rows: string[][]): DeletedRecord[] {
     amount: parseAmount(row[6]),
     paymentType: row[7] ?? "",
   }));
+}
+
+function parsePartnerExpense(record: TransactionRecord): PartnerExpense | null {
+  if (record.type !== "Gider" || !record.description.includes("[ORTAK:")) {
+    return null;
+  }
+
+  const payerMatch = record.description.match(/\[ORTAK:([^|\]]+)/);
+  const statusMatch = record.description.match(/\|DURUM:([^|\]]+)/);
+  const payer = payerMatch?.[1]?.trim() === "Ortağım" ? "Ortağım" : "Ben";
+  const status = statusMatch?.[1]?.trim() === "Kapandı" ? "Kapandı" : "Açık";
+  const description = record.description.replace(/\s*\[ORTAK:[^\]]+\]\s*/g, "").trim();
+
+  return {
+    rowNumber: record.rowNumber,
+    date: record.date,
+    description,
+    amount: record.amount,
+    payer,
+    share: record.amount / 2,
+    status,
+  };
+}
+
+function summarizePartner(transactions: TransactionRecord[]): PartnerSummary {
+  const openItems = transactions
+    .map(parsePartnerExpense)
+    .filter((item): item is PartnerExpense => Boolean(item))
+    .filter((item) => item.status === "Açık");
+  const youPaid = openItems.filter((item) => item.payer === "Ben").reduce((sum, item) => sum + item.share, 0);
+  const partnerPaid = openItems.filter((item) => item.payer === "Ortağım").reduce((sum, item) => sum + item.share, 0);
+  const net = youPaid - partnerPaid;
+
+  return {
+    youPaid,
+    partnerPaid,
+    partnerOwesYou: Math.max(net, 0),
+    youOwePartner: Math.max(-net, 0),
+    net,
+    openItems,
+  };
 }
 
 function todayTr(): string {
@@ -312,6 +363,7 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
   const transactions = mapTransactions(rowsFromRange(transactionsRange?.values as string[][] | undefined));
   const appRecords = mapAppRecords(rowsFromRange(appRecordsRange?.values as string[][] | undefined));
   const deletedRecords = mapDeletedRecords(rowsFromRange(deletedRecordsRange?.values as string[][] | undefined));
+  const partner = summarizePartner(transactions);
 
   const income = transactions
     .filter((record) => record.type.toLocaleLowerCase("tr-TR") === "gelir")
@@ -342,6 +394,7 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
     transactions,
     appRecords,
     deletedRecords,
+    partner,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -572,11 +625,12 @@ export async function createAccountingRecord(payload: CreateRecordPayload): Prom
   }
 
   if (record.recordType === "expense") {
+    const description = [record.description || record.customer, record.note].filter(Boolean).join(" ");
     await appendTransactionRow(sheets, spreadsheetId, [
       date,
       "Gider",
       record.jobType,
-      record.description || record.customer,
+      description,
       record.amount,
       record.paymentType,
     ]);

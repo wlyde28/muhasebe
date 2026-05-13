@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 
 type EntryPage = 'income' | 'expense' | 'kaplanIncome' | 'kaplanExpense';
-type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'deleted';
+type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'partner' | 'deleted';
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
@@ -61,6 +61,25 @@ type DeletedRecord = {
   paymentType: string;
 };
 
+type PartnerExpense = {
+  rowNumber?: number;
+  date: string;
+  description: string;
+  amount: number;
+  payer: 'Ben' | 'Ortağım';
+  share: number;
+  status: 'Açık' | 'Kapandı';
+};
+
+type PartnerSummary = {
+  youPaid: number;
+  partnerPaid: number;
+  partnerOwesYou: number;
+  youOwePartner: number;
+  net: number;
+  openItems: PartnerExpense[];
+};
+
 type AccountingSummary = {
   configured: boolean;
   totals: {
@@ -76,6 +95,7 @@ type AccountingSummary = {
   transactions: TransactionRecord[];
   appRecords: AppRecord[];
   deletedRecords: DeletedRecord[];
+  partner: PartnerSummary;
 };
 
 type FormState = {
@@ -87,6 +107,8 @@ type FormState = {
   amount: string;
   paymentType: string;
   paymentStatus: PaymentStatus;
+  sharedExpense: 'Hayır' | 'Evet';
+  expensePayer: 'Ben' | 'Ortağım';
 };
 
 type ReceivableEditState = {
@@ -114,6 +136,8 @@ const initialForm: FormState = {
   amount: '',
   paymentType: 'Nakit',
   paymentStatus: 'Tahsil Edilmedi',
+  sharedExpense: 'Hayır',
+  expensePayer: 'Ben',
 };
 
 const entryConfig: Record<EntryPage, { title: string; subtitle: string; action: string; recordType: RecordType }> = {
@@ -331,7 +355,14 @@ export default function App() {
           paymentStatus: entryPage === 'income' || entryPage === 'kaplanIncome' ? form.paymentStatus : 'Tahsil Edildi',
           paymentType: form.paymentType,
           employee: form.employee,
-          note: kaplan ? 'Kaplan Teknik' : '',
+          note: [
+            kaplan ? 'Kaplan Teknik' : '',
+            (entryPage === 'expense' || entryPage === 'kaplanExpense') && form.sharedExpense === 'Evet'
+              ? `[ORTAK:${form.expensePayer}|DURUM:Açık]`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
         }),
       });
 
@@ -633,6 +664,7 @@ export default function App() {
           <PageTab active={activePage === 'kaplanExpense'} label="Kaplan Gider" onPress={() => switchPage('kaplanExpense')} />
           <PageTab active={activePage === 'collection'} label="Tahsilat" onPress={() => switchPage('collection')} />
           <PageTab active={activePage === 'collected'} label="Tahsil Edilen" onPress={() => switchPage('collected')} />
+          <PageTab active={activePage === 'partner'} label="Ortak Hesabı" onPress={() => switchPage('partner')} />
           <PageTab active={activePage === 'deleted'} label="Silinenler" onPress={() => switchPage('deleted')} />
         </View>
 
@@ -716,6 +748,10 @@ export default function App() {
 
         {activePage === 'collected' ? (
           <CollectedPage receivables={collectedReceivables} onMarkUncollected={confirmMarkUncollected} />
+        ) : null}
+
+        {activePage === 'partner' ? (
+          <PartnerPage partner={summary?.partner} />
         ) : null}
 
         {activePage === 'deleted' ? (
@@ -1012,6 +1048,49 @@ function DeletedPage({ records }: { records: DeletedRecord[] }) {
   );
 }
 
+function PartnerPage({ partner }: { partner?: PartnerSummary }) {
+  const openItems = partner?.openItems ?? [];
+  const net = partner?.net ?? 0;
+  const netText =
+    net > 0
+      ? `Ortağım bana ${currency(partner?.partnerOwesYou ?? 0)} ödeyecek`
+      : net < 0
+        ? `Ben ortağıma ${currency(partner?.youOwePartner ?? 0)} ödeyeceğim`
+        : 'Mahsuplaşma dengede';
+
+  return (
+    <>
+      <View style={styles.summaryGrid}>
+        <Metric label="Ortağım Bana" value={currency(partner?.partnerOwesYou ?? 0)} tone="green" />
+        <Metric label="Ben Ortağıma" value={currency(partner?.youOwePartner ?? 0)} tone="red" />
+        <Metric label="Net" value={currency(Math.abs(net))} tone="blue" />
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Net Mahsuplaşma</Text>
+        <View style={styles.totalBand}>
+          <Text style={styles.totalBandLabel}>{netText}</Text>
+          <Text style={styles.totalBandValue}>{currency(Math.abs(net))}</Text>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Açık Ortak Giderler</Text>
+        {openItems.length === 0 ? <Text style={styles.empty}>Açık ortak gider yok.</Text> : null}
+        {openItems.map((item, index) => (
+          <ListRow
+            key={`${item.rowNumber}-${item.description}-${index}`}
+            title={item.description}
+            subtitle={`${item.date} · ödeyen: ${item.payer} · yarısı ${currency(item.share)}`}
+            value={currency(item.amount)}
+            tone={item.payer === 'Ben' ? 'green' : 'red'}
+          />
+        ))}
+      </View>
+    </>
+  );
+}
+
 function RecordForm({
   page,
   config,
@@ -1078,6 +1157,31 @@ function RecordForm({
         ]}
         onChange={(value) => onUpdateForm('paymentType', value)}
       />
+
+      {expensePage ? (
+        <>
+          <Segmented
+            label="Ortak Gider"
+            value={form.sharedExpense}
+            options={[
+              ['Hayır', 'Hayır'],
+              ['Evet', 'Evet'],
+            ]}
+            onChange={(value) => onUpdateForm('sharedExpense', value as 'Hayır' | 'Evet')}
+          />
+          {form.sharedExpense === 'Evet' ? (
+            <Segmented
+              label="Ödemeyi Yapan"
+              value={form.expensePayer}
+              options={[
+                ['Ben', 'Ben'],
+                ['Ortağım', 'Ortağım'],
+              ]}
+              onChange={(value) => onUpdateForm('expensePayer', value as 'Ben' | 'Ortağım')}
+            />
+          ) : null}
+        </>
+      ) : null}
 
       {page === 'income' || page === 'kaplanIncome' ? (
         <Segmented

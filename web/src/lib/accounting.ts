@@ -34,6 +34,7 @@ export type AccountingSummary = {
   transactions: TransactionRecord[];
   appRecords: AppRecord[];
   deletedRecords: DeletedRecord[];
+  partner: PartnerSummary;
   generatedAt: string;
 };
 
@@ -60,6 +61,25 @@ export type DeletedRecord = {
   description: string;
   amount: number;
   paymentType: string;
+};
+
+export type PartnerSummary = {
+  youPaid: number;
+  partnerPaid: number;
+  partnerOwesYou: number;
+  youOwePartner: number;
+  net: number;
+  openItems: PartnerExpense[];
+};
+
+export type PartnerExpense = {
+  rowNumber?: number;
+  date: string;
+  description: string;
+  amount: number;
+  payer: "Ben" | "Ortağım";
+  share: number;
+  status: "Açık" | "Kapandı";
 };
 
 export type CreateRecordPayload = {
