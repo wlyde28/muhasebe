@@ -299,6 +299,54 @@ function receiptHtml(record: WorkRecord) {
   `;
 }
 
+function monthlyReportHtml(month: string, transactions: TransactionRecord[]) {
+  const incomeRows = transactions.filter((record) => record.type === 'Gelir');
+  const expenseRows = transactions.filter((record) => record.type === 'Gider');
+  const income = incomeRows.reduce((sum, record) => sum + record.amount, 0);
+  const expenses = expenseRows.reduce((sum, record) => sum + record.amount, 0);
+  const rows = transactions
+    .map(
+      (record) => `
+        <tr>
+          <td>${record.date}</td>
+          <td>${record.type}</td>
+          <td>${record.category}</td>
+          <td>${stripMarkers(record.description)}</td>
+          <td>${record.paymentType}</td>
+          <td style="text-align:right">${currency(record.amount)}</td>
+        </tr>
+      `,
+    )
+    .join('');
+
+  return `
+    <html>
+      <body style="font-family: Arial; padding: 28px; color: #17211d;">
+        <h1>Aylık Gelir Gider Raporu</h1>
+        <h2>${month}</h2>
+        <div style="display:flex; gap:12px; margin:18px 0;">
+          <div><strong>Gelir:</strong> ${currency(income)}</div>
+          <div><strong>Gider:</strong> ${currency(expenses)}</div>
+          <div><strong>Net:</strong> ${currency(income - expenses)}</div>
+        </div>
+        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+          <thead>
+            <tr>
+              <th style="text-align:left; border-bottom:1px solid #ccc;">Tarih</th>
+              <th style="text-align:left; border-bottom:1px solid #ccc;">Tür</th>
+              <th style="text-align:left; border-bottom:1px solid #ccc;">Kategori</th>
+              <th style="text-align:left; border-bottom:1px solid #ccc;">Açıklama</th>
+              <th style="text-align:left; border-bottom:1px solid #ccc;">Ödeme</th>
+              <th style="text-align:right; border-bottom:1px solid #ccc;">Tutar</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="6">Bu ay için hareket yok.</td></tr>'}</tbody>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
 export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
   const [activePage, setActivePage] = useState<PageKey>('summary');
@@ -1107,6 +1155,25 @@ export default function App() {
     }
   }
 
+  async function createMonthlyReportPdf(month: string, transactions: TransactionRecord[]) {
+    try {
+      const pdf = await Print.printToFileAsync({ html: monthlyReportHtml(month, transactions) });
+      const available = await Sharing.isAvailableAsync();
+
+      if (available) {
+        await Sharing.shareAsync(pdf.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: `${month} gelir gider raporu`,
+        });
+        return;
+      }
+
+      Alert.alert('PDF hazır', pdf.uri);
+    } catch (caught) {
+      Alert.alert('PDF oluşturulamadı', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -1155,6 +1222,8 @@ export default function App() {
             recentAppRecords={recentAppRecords}
             collectedReceivables={collectedReceivables}
             onDeleteRecord={deleteRecord}
+            reportMonth={monthKey(filters.startDate) || monthKey(todayInput())}
+            onCreateMonthlyReport={createMonthlyReportPdf}
           />
         ) : null}
 
@@ -1265,12 +1334,16 @@ function SummaryPage({
   recentAppRecords,
   collectedReceivables,
   onDeleteRecord,
+  reportMonth,
+  onCreateMonthlyReport,
 }: {
   summary: AccountingSummary | null;
   recentTransactions: TransactionRecord[];
   recentAppRecords: AppRecord[];
   collectedReceivables: WorkRecord[];
   onDeleteRecord: (id: string) => void;
+  reportMonth: string;
+  onCreateMonthlyReport: (month: string, transactions: TransactionRecord[]) => void;
 }) {
   const collectedTotal = collectedReceivables.reduce((sum, record) => sum + record.amount, 0);
   const expensesTotal = summary?.totals.expenses ?? 0;
@@ -1278,15 +1351,12 @@ function SummaryPage({
   const chartTotal = collectedTotal + expensesTotal;
   const incomePercent = percent(collectedTotal, chartTotal);
   const expensePercent = percent(expensesTotal, chartTotal);
-  const currentMonth = monthKey(todayInput());
+  const currentMonth = reportMonth || monthKey(todayInput());
+  const monthlyTransactions = summary?.transactions.filter((record) => monthKey(record.date) === currentMonth) ?? [];
   const monthlyIncome =
-    summary?.transactions
-      .filter((record) => record.type === 'Gelir' && monthKey(record.date) === currentMonth)
-      .reduce((sum, record) => sum + record.amount, 0) ?? 0;
+    monthlyTransactions.filter((record) => record.type === 'Gelir').reduce((sum, record) => sum + record.amount, 0);
   const monthlyExpenses =
-    summary?.transactions
-      .filter((record) => record.type === 'Gider' && monthKey(record.date) === currentMonth)
-      .reduce((sum, record) => sum + record.amount, 0) ?? 0;
+    monthlyTransactions.filter((record) => record.type === 'Gider').reduce((sum, record) => sum + record.amount, 0);
   const employeeRows = EMPLOYEES.map((employee) => {
     const records = summary?.appRecords.filter((record) => record.employee === employee) ?? [];
 
@@ -1326,6 +1396,16 @@ function SummaryPage({
         <Metric label="Bu Ay Gelir" value={currency(monthlyIncome)} tone="green" />
         <Metric label="Bu Ay Gider" value={currency(monthlyExpenses)} tone="red" />
         <Metric label="Bu Ay Net" value={currency(monthlyIncome - monthlyExpenses)} tone="blue" />
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Aylık Rapor</Text>
+        <View style={styles.totalBand}>
+          <Text style={styles.totalBandLabel}>{currentMonth} gelir gider raporu</Text>
+          <Pressable style={styles.primaryButtonInline} onPress={() => onCreateMonthlyReport(currentMonth, monthlyTransactions)}>
+            <Text style={styles.primaryButtonText}>PDF İndir</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.section}>
