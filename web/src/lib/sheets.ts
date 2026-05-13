@@ -217,7 +217,7 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
       collected,
       income,
       expenses,
-      net: income - expenses,
+      net: collected - expenses,
     },
     jobs,
     receivables,

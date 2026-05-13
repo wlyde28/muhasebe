@@ -14,8 +14,8 @@ import {
   View,
 } from 'react-native';
 
-type EntryPage = 'income' | 'expense' | 'collection';
-type PageKey = 'summary' | EntryPage;
+type EntryPage = 'income' | 'expense';
+type PageKey = 'summary' | EntryPage | 'collection' | 'collected';
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
@@ -56,6 +56,7 @@ type AccountingSummary = {
     receivables: number;
     income: number;
     expenses: number;
+    collected: number;
     net: number;
   };
   jobs: WorkRecord[];
@@ -107,12 +108,6 @@ const entryConfig: Record<EntryPage, { title: string; subtitle: string; action: 
     action: 'Gideri Kaydet',
     recordType: 'expense',
   },
-  collection: {
-    title: 'Tahsilat',
-    subtitle: 'Alınan ödemeyi gelir olarak işle',
-    action: 'Tahsilatı Kaydet',
-    recordType: 'payment',
-  },
 };
 
 function currency(amount: number) {
@@ -135,7 +130,7 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const entryPage: EntryPage = activePage === 'summary' ? 'income' : activePage;
+  const entryPage: EntryPage = activePage === 'expense' ? 'expense' : 'income';
   const activeConfig = entryConfig[entryPage];
 
   const openReceivables = useMemo(
@@ -143,6 +138,14 @@ export default function App() {
       summary?.receivables
         .filter((record) => record.customer && record.amount > 0 && record.status !== 'Tahsil Edildi')
         .slice(0, 12) ?? [],
+    [summary],
+  );
+  const collectedReceivables = useMemo(
+    () =>
+      summary?.receivables
+        .filter((record) => record.customer && record.amount > 0 && record.status === 'Tahsil Edildi')
+        .slice(0, 24)
+        .reverse() ?? [],
     [summary],
   );
   const incomeTransactions = useMemo(
@@ -198,7 +201,6 @@ export default function App() {
 
   function defaultCategory(page: EntryPage) {
     if (page === 'expense') return 'Gider';
-    if (page === 'collection') return 'Tahsilat';
     return 'Klima Montajı';
   }
 
@@ -215,7 +217,7 @@ export default function App() {
   function switchPage(page: PageKey) {
     setActivePage(page);
 
-    if (page !== 'summary') {
+    if (page === 'income' || page === 'expense') {
       setForm((current) => ({
         ...current,
         category: defaultCategory(page),
@@ -349,8 +351,8 @@ export default function App() {
           <Text style={styles.company}>Durukan Klima</Text>
           <Text style={styles.title}>Muhasebe</Text>
           <View style={styles.heroFooter}>
-            <SummaryPill label="Net" value={currency(summary?.totals.net ?? 0)} />
-            <SummaryPill label="Açık" value={currency(summary?.totals.receivables ?? 0)} />
+            <SummaryPill label="Net Kar" value={currency(summary?.totals.net ?? 0)} />
+            <SummaryPill label="Tahsil Edilmeyen" value={currency(summary?.totals.receivables ?? 0)} />
           </View>
         </View>
 
@@ -368,6 +370,7 @@ export default function App() {
           <PageTab active={activePage === 'income'} label="Gelir" onPress={() => switchPage('income')} />
           <PageTab active={activePage === 'expense'} label="Gider" onPress={() => switchPage('expense')} />
           <PageTab active={activePage === 'collection'} label="Tahsilat" onPress={() => switchPage('collection')} />
+          <PageTab active={activePage === 'collected'} label="Tahsil Edilen" onPress={() => switchPage('collected')} />
         </View>
 
         {activePage === 'summary' ? (
@@ -375,6 +378,7 @@ export default function App() {
             summary={summary}
             recentTransactions={recentTransactions}
             recentAppRecords={recentAppRecords}
+            collectedReceivables={collectedReceivables}
             onDeleteRecord={deleteRecord}
           />
         ) : null}
@@ -405,14 +409,13 @@ export default function App() {
 
         {activePage === 'collection' ? (
           <CollectionPage
-            form={form}
-            saving={saving}
             receivables={openReceivables}
-            recentTransactions={incomeTransactions}
-            onSubmit={submitRecord}
-            onUpdateForm={updateForm}
             onMarkCollected={confirmMarkCollected}
           />
+        ) : null}
+
+        {activePage === 'collected' ? (
+          <CollectedPage receivables={collectedReceivables} />
         ) : null}
       </ScrollView>
     </SafeAreaView>
@@ -423,19 +426,24 @@ function SummaryPage({
   summary,
   recentTransactions,
   recentAppRecords,
+  collectedReceivables,
   onDeleteRecord,
 }: {
   summary: AccountingSummary | null;
   recentTransactions: TransactionRecord[];
   recentAppRecords: AppRecord[];
+  collectedReceivables: WorkRecord[];
   onDeleteRecord: (id: string) => void;
 }) {
+  const collectedTotal = collectedReceivables.reduce((sum, record) => sum + record.amount, 0);
+  const netProfit = collectedTotal - (summary?.totals.expenses ?? 0);
+
   return (
     <>
       <View style={styles.summaryGrid}>
-        <Metric label="Gelir" value={currency(summary?.totals.income ?? 0)} tone="green" />
+        <Metric label="Net Kar" value={currency(netProfit)} tone="green" />
+        <Metric label="Tahsil Edilmeyen" value={currency(summary?.totals.receivables ?? 0)} tone="orange" />
         <Metric label="Gider" value={currency(summary?.totals.expenses ?? 0)} tone="red" />
-        <Metric label="İşler" value={currency(summary?.totals.jobs ?? 0)} tone="blue" />
       </View>
 
       <View style={styles.section}>
@@ -518,33 +526,14 @@ function EntryPageView({
 }
 
 function CollectionPage({
-  form,
-  saving,
   receivables,
-  recentTransactions,
-  onSubmit,
-  onUpdateForm,
   onMarkCollected,
 }: {
-  form: FormState;
-  saving: boolean;
   receivables: WorkRecord[];
-  recentTransactions: TransactionRecord[];
-  onSubmit: () => void;
-  onUpdateForm: (key: keyof FormState, value: string) => void;
   onMarkCollected: (record: WorkRecord) => void;
 }) {
   return (
     <>
-      <RecordForm
-        page="collection"
-        config={entryConfig.collection}
-        form={form}
-        saving={saving}
-        onSubmit={onSubmit}
-        onUpdateForm={onUpdateForm}
-      />
-
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Açık Tahsilatlar</Text>
         {receivables.length === 0 ? <Text style={styles.empty}>Açık tahsilat görünmüyor.</Text> : null}
@@ -559,15 +548,31 @@ function CollectionPage({
           />
         ))}
       </View>
+    </>
+  );
+}
+
+function CollectedPage({ receivables }: { receivables: WorkRecord[] }) {
+  const collectedTotal = receivables.reduce((sum, record) => sum + record.amount, 0);
+
+  return (
+    <>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Tahsil Edilen Toplam</Text>
+        <View style={styles.totalBand}>
+          <Text style={styles.totalBandLabel}>Kasaya giren</Text>
+          <Text style={styles.totalBandValue}>{currency(collectedTotal)}</Text>
+        </View>
+      </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Son Tahsilatlar</Text>
-        {recentTransactions.length === 0 ? <Text style={styles.empty}>Henüz tahsilat yok.</Text> : null}
-        {recentTransactions.map((record, index) => (
+        <Text style={styles.sectionTitle}>Tahsil Edilenler</Text>
+        {receivables.length === 0 ? <Text style={styles.empty}>Henüz tahsil edilen kayıt yok.</Text> : null}
+        {receivables.map((record) => (
           <ListRow
-            key={`${record.date}-${record.description}-${record.amount}-${index}`}
-            title={record.description || record.category}
-            subtitle={`${record.date} · ${record.paymentType}`}
+            key={`${record.rowNumber}-${record.customer}-${record.amount}`}
+            title={record.customer}
+            subtitle={`${record.job} · tahsil edildi`}
             value={currency(record.amount)}
             tone="green"
           />
@@ -662,7 +667,7 @@ function SummaryPill({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: string; tone: 'green' | 'red' | 'blue' }) {
+function Metric({ label, value, tone }: { label: string; value: string; tone: 'green' | 'red' | 'blue' | 'orange' }) {
   return (
     <View style={styles.metric}>
       <View style={[styles.metricDot, styles[`${tone}Dot`]]} />
@@ -896,6 +901,9 @@ const styles = StyleSheet.create({
   blueDot: {
     backgroundColor: '#2f6fb3',
   },
+  orangeDot: {
+    backgroundColor: '#d4822f',
+  },
   metricLabel: {
     color: '#65736c',
     fontSize: 12,
@@ -1020,6 +1028,23 @@ const styles = StyleSheet.create({
   empty: {
     color: '#65736c',
     padding: 14,
+  },
+  totalBand: {
+    backgroundColor: '#f5f8f6',
+    borderTopColor: '#edf2ef',
+    borderTopWidth: 1,
+    padding: 16,
+  },
+  totalBandLabel: {
+    color: '#65736c',
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  totalBandValue: {
+    color: '#1f8b54',
+    fontSize: 26,
+    fontWeight: '900',
   },
   listRow: {
     alignItems: 'center',
