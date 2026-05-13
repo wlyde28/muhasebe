@@ -161,6 +161,8 @@ function localPinKey(employee: EmployeeName) {
   return `durukan-local-pin-${employee}`;
 }
 
+const LEGACY_LOCAL_PIN_KEY = 'durukan-local-pin';
+
 const requestHeaders = {
   'Content-Type': 'application/json',
   ...(APP_PIN ? { 'x-app-pin': APP_PIN } : {}),
@@ -363,6 +365,18 @@ function receivableToIncomeTransaction(record: WorkRecord): TransactionRecord {
   };
 }
 
+function kaplanReceivableToIncomeTransaction(record: WorkRecord): TransactionRecord {
+  return {
+    rowNumber: record.rowNumber,
+    date: record.date ?? todayInput(),
+    type: 'Gelir',
+    category: 'Kaplan Teknik Tahsilat',
+    description: `${record.customer} - ${record.job}`,
+    amount: record.amount,
+    paymentType: record.status === 'Tahsil Edildi' ? 'Tahsil Edildi' : 'Açık',
+  };
+}
+
 export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
   const [activePage, setActivePage] = useState<PageKey>('summary');
@@ -528,7 +542,17 @@ export default function App() {
         LocalAuthentication.isEnrolledAsync(),
       ]);
       const employee = EMPLOYEES.includes(rememberedEmployee as EmployeeName) ? (rememberedEmployee as EmployeeName) : 'Durukan';
-      const storedPin = await SecureStore.getItemAsync(localPinKey(employee));
+      let storedPin = await SecureStore.getItemAsync(localPinKey(employee));
+
+      if (!storedPin) {
+        const legacyPin = await SecureStore.getItemAsync(LEGACY_LOCAL_PIN_KEY);
+
+        if (legacyPin) {
+          await SecureStore.setItemAsync(localPinKey(employee), legacyPin);
+          await SecureStore.deleteItemAsync(LEGACY_LOCAL_PIN_KEY);
+          storedPin = legacyPin;
+        }
+      }
 
       setSavedPin(storedPin);
       setCreatingPin(!storedPin);
@@ -1192,6 +1216,29 @@ export default function App() {
     }
   }
 
+  async function createKaplanReportPdf(transactions: TransactionRecord[], receivables: WorkRecord[]) {
+    try {
+      const kaplanRows = [
+        ...receivables.map(kaplanReceivableToIncomeTransaction),
+        ...transactions,
+      ];
+      const pdf = await Print.printToFileAsync({ html: monthlyReportHtml('Kaplan Teknik Cari', kaplanRows) });
+      const available = await Sharing.isAvailableAsync();
+
+      if (available) {
+        await Sharing.shareAsync(pdf.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Kaplan Teknik cari raporu',
+        });
+        return;
+      }
+
+      Alert.alert('PDF hazır', pdf.uri);
+    } catch (caught) {
+      Alert.alert('PDF oluşturulamadı', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -1340,7 +1387,11 @@ export default function App() {
         ) : null}
 
         {activePage === 'kaplanLedger' ? (
-          <KaplanLedgerPage transactions={summary?.transactions ?? []} receivables={summary?.receivables ?? []} />
+          <KaplanLedgerPage
+            transactions={summary?.transactions ?? []}
+            receivables={summary?.receivables ?? []}
+            onCreateReport={createKaplanReportPdf}
+          />
         ) : null}
 
         {activePage === 'deleted' ? (
@@ -1868,7 +1919,15 @@ function CustomerPage({
   );
 }
 
-function KaplanLedgerPage({ transactions, receivables }: { transactions: TransactionRecord[]; receivables: WorkRecord[] }) {
+function KaplanLedgerPage({
+  transactions,
+  receivables,
+  onCreateReport,
+}: {
+  transactions: TransactionRecord[];
+  receivables: WorkRecord[];
+  onCreateReport: (transactions: TransactionRecord[], receivables: WorkRecord[]) => void;
+}) {
   const kaplanTransactions = transactions.filter((record) => isKaplanRecord(record));
   const kaplanReceivables = receivables.filter((record) => record.job.includes('Kaplan Teknik'));
   const income = kaplanTransactions.filter((record) => record.type === 'Gelir').reduce((sum, record) => sum + record.amount, 0);
@@ -1887,6 +1946,9 @@ function KaplanLedgerPage({ transactions, receivables }: { transactions: Transac
         <View style={styles.totalBand}>
           <Text style={styles.totalBandLabel}>Net durum</Text>
           <Text style={styles.totalBandValue}>{currency(income - expenses)}</Text>
+          <Pressable style={styles.primaryButtonInline} onPress={() => onCreateReport(kaplanTransactions, kaplanReceivables)}>
+            <Text style={styles.primaryButtonText}>Kaplan PDF İndir</Text>
+          </Pressable>
         </View>
         {kaplanReceivables.slice(-12).reverse().map((record, index) => (
           <ListRow
