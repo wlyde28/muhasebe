@@ -14,7 +14,8 @@ import {
   View,
 } from 'react-native';
 
-type TabKey = 'income' | 'expense' | 'collection';
+type EntryPage = 'income' | 'expense' | 'collection';
+type PageKey = 'summary' | EntryPage;
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
@@ -93,7 +94,7 @@ const initialForm: FormState = {
   paymentStatus: 'Tahsil Edilmedi',
 };
 
-const tabConfig: Record<TabKey, { title: string; subtitle: string; action: string; recordType: RecordType }> = {
+const entryConfig: Record<EntryPage, { title: string; subtitle: string; action: string; recordType: RecordType }> = {
   income: {
     title: 'Gelir',
     subtitle: 'Yeni yapılan işi veya satışı kaydet',
@@ -102,7 +103,7 @@ const tabConfig: Record<TabKey, { title: string; subtitle: string; action: strin
   },
   expense: {
     title: 'Gider',
-    subtitle: 'Yapılan masrafın açıklamasını ve tutarını gir',
+    subtitle: 'Yaptığın masrafın açıklamasını ve tutarını gir',
     action: 'Gideri Kaydet',
     recordType: 'expense',
   },
@@ -128,18 +129,36 @@ function parseAmount(value: string) {
 
 export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>('income');
+  const [activePage, setActivePage] = useState<PageKey>('summary');
   const [form, setForm] = useState<FormState>(initialForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const activeConfig = tabConfig[activeTab];
+  const entryPage: EntryPage = activePage === 'summary' ? 'income' : activePage;
+  const activeConfig = entryConfig[entryPage];
+
   const openReceivables = useMemo(
     () =>
       summary?.receivables
         .filter((record) => record.customer && record.amount > 0 && record.status !== 'Tahsil Edildi')
-        .slice(0, 6) ?? [],
+        .slice(0, 12) ?? [],
+    [summary],
+  );
+  const incomeTransactions = useMemo(
+    () =>
+      summary?.transactions
+        .filter((record) => record.type === 'Gelir' && record.amount > 0)
+        .slice(-10)
+        .reverse() ?? [],
+    [summary],
+  );
+  const expenseTransactions = useMemo(
+    () =>
+      summary?.transactions
+        .filter((record) => record.type === 'Gider' && record.amount > 0)
+        .slice(-10)
+        .reverse() ?? [],
     [summary],
   );
   const recentTransactions = useMemo(
@@ -177,22 +196,32 @@ export default function App() {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
-  function resetForm() {
+  function defaultCategory(page: EntryPage) {
+    if (page === 'expense') return 'Gider';
+    if (page === 'collection') return 'Tahsilat';
+    return 'Klima Montajı';
+  }
+
+  function resetForm(page: EntryPage) {
     setForm((current) => ({
       ...initialForm,
       employee: current.employee,
       paymentType: current.paymentType,
-      category: activeTab === 'expense' ? 'Gider' : activeTab === 'collection' ? 'Tahsilat' : 'Klima Montajı',
+      category: defaultCategory(page),
+      paymentStatus: page === 'income' ? 'Tahsil Edilmedi' : 'Tahsil Edildi',
     }));
   }
 
-  function switchTab(tab: TabKey) {
-    setActiveTab(tab);
-    setForm((current) => ({
-      ...current,
-      category: tab === 'expense' ? 'Gider' : tab === 'collection' ? 'Tahsilat' : 'Klima Montajı',
-      paymentStatus: tab === 'income' ? current.paymentStatus : 'Tahsil Edildi',
-    }));
+  function switchPage(page: PageKey) {
+    setActivePage(page);
+
+    if (page !== 'summary') {
+      setForm((current) => ({
+        ...current,
+        category: defaultCategory(page),
+        paymentStatus: page === 'income' ? current.paymentStatus : 'Tahsil Edildi',
+      }));
+    }
   }
 
   async function submitRecord() {
@@ -203,7 +232,7 @@ export default function App() {
       return;
     }
 
-    if (activeTab !== 'expense' && !form.customer.trim()) {
+    if (entryPage !== 'expense' && !form.customer.trim()) {
       Alert.alert('Müşteri gerekli', 'Gelir ve tahsilat kayıtlarında müşteri adı gir.');
       return;
     }
@@ -220,7 +249,7 @@ export default function App() {
           jobType: form.category,
           description: form.description,
           amount: numericAmount,
-          paymentStatus: activeTab === 'income' ? form.paymentStatus : 'Tahsil Edildi',
+          paymentStatus: entryPage === 'income' ? form.paymentStatus : 'Tahsil Edildi',
           paymentType: form.paymentType,
           employee: form.employee,
         }),
@@ -231,7 +260,7 @@ export default function App() {
         throw new Error(body.detail ?? body.error ?? 'Kayıt eklenemedi');
       }
 
-      resetForm();
+      resetForm(entryPage);
       await loadSummary();
       Alert.alert('Kaydedildi', `${activeConfig.title} kaydı Google Sheet tablosuna işlendi.`);
     } catch (caught) {
@@ -334,126 +363,293 @@ export default function App() {
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        <View style={styles.summaryGrid}>
-          <Metric label="Gelir" value={currency(summary?.totals.income ?? 0)} tone="green" />
-          <Metric label="Gider" value={currency(summary?.totals.expenses ?? 0)} tone="red" />
-          <Metric label="İşler" value={currency(summary?.totals.jobs ?? 0)} tone="blue" />
+        <View style={styles.pageTabs}>
+          <PageTab active={activePage === 'summary'} label="Özet" onPress={() => switchPage('summary')} />
+          <PageTab active={activePage === 'income'} label="Gelir" onPress={() => switchPage('income')} />
+          <PageTab active={activePage === 'expense'} label="Gider" onPress={() => switchPage('expense')} />
+          <PageTab active={activePage === 'collection'} label="Tahsilat" onPress={() => switchPage('collection')} />
         </View>
 
-        <View style={styles.tabs}>
-          <TabButton active={activeTab === 'income'} label="Gelir" onPress={() => switchTab('income')} />
-          <TabButton active={activeTab === 'expense'} label="Gider" onPress={() => switchTab('expense')} />
-          <TabButton active={activeTab === 'collection'} label="Tahsilat" onPress={() => switchTab('collection')} />
-        </View>
-
-        <View style={styles.formCard}>
-          <View style={styles.formHeader}>
-            <View>
-              <Text style={styles.formTitle}>{activeConfig.title}</Text>
-              <Text style={styles.formSubtitle}>{activeConfig.subtitle}</Text>
-            </View>
-            <Text style={styles.formBadge}>{form.paymentType}</Text>
-          </View>
-
-          <Input label="Eleman" value={form.employee} onChangeText={(value) => updateForm('employee', value)} placeholder="Örn. Ahmet" />
-          {activeTab !== 'expense' ? (
-            <>
-              <Input label="Müşteri" value={form.customer} onChangeText={(value) => updateForm('customer', value)} placeholder="Müşteri adı" />
-              <Input label="Telefon" value={form.phone} onChangeText={(value) => updateForm('phone', value)} placeholder="İsteğe bağlı" keyboardType="phone-pad" />
-            </>
-          ) : null}
-          {activeTab !== 'expense' ? (
-            <Input
-              label="İş / İşlem"
-              value={form.category}
-              onChangeText={(value) => updateForm('category', value)}
-              placeholder="Klima montajı, servis..."
-            />
-          ) : null}
-          <Input
-            label={activeTab === 'expense' ? 'Gider Açıklaması' : 'Açıklama'}
-            value={form.description}
-            onChangeText={(value) => updateForm('description', value)}
-            placeholder={activeTab === 'expense' ? 'Örn. yakıt, yemek, malzeme alımı' : 'Kısa açıklama'}
+        {activePage === 'summary' ? (
+          <SummaryPage
+            summary={summary}
+            recentTransactions={recentTransactions}
+            recentAppRecords={recentAppRecords}
+            onDeleteRecord={deleteRecord}
           />
-          <Input label="Tutar" value={form.amount} onChangeText={(value) => updateForm('amount', value)} placeholder="0" keyboardType="decimal-pad" />
+        ) : null}
 
-          <Segmented
-            label="Ödeme Türü"
-            value={form.paymentType}
-            options={[
-              ['Nakit', 'Nakit'],
-              ['Kart', 'Kart'],
-              ['Havale', 'Havale'],
-            ]}
-            onChange={(value) => updateForm('paymentType', value)}
+        {activePage === 'income' ? (
+          <EntryPageView
+            page="income"
+            config={activeConfig}
+            form={form}
+            saving={saving}
+            transactions={incomeTransactions}
+            onSubmit={submitRecord}
+            onUpdateForm={updateForm}
           />
+        ) : null}
 
-          {activeTab === 'income' ? (
-            <Segmented
-              label="Tahsilat Durumu"
-              value={form.paymentStatus}
-              options={[
-                ['Tahsil Edilmedi', 'Açık'],
-                ['Tahsil Edildi', 'Ödendi'],
-              ]}
-              onChange={(value) => updateForm('paymentStatus', value as PaymentStatus)}
-            />
-          ) : null}
+        {activePage === 'expense' ? (
+          <EntryPageView
+            page="expense"
+            config={activeConfig}
+            form={form}
+            saving={saving}
+            transactions={expenseTransactions}
+            onSubmit={submitRecord}
+            onUpdateForm={updateForm}
+          />
+        ) : null}
 
-          <Pressable style={[styles.primaryButton, saving && styles.disabled]} onPress={submitRecord} disabled={saving}>
-            <Text style={styles.primaryButtonText}>{saving ? 'Kaydediliyor' : activeConfig.action}</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Açık Tahsilatlar</Text>
-          {openReceivables.length === 0 ? <Text style={styles.empty}>Açık tahsilat görünmüyor.</Text> : null}
-          {openReceivables.map((record) => (
-            <ListRow
-              key={`${record.customer}-${record.amount}-${record.job}`}
-              title={record.customer}
-              subtitle={`${record.job} · dokun, tahsil edildi yap`}
-              value={currency(record.amount)}
-              tone="orange"
-              onPress={() => confirmMarkCollected(record)}
-            />
-          ))}
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Son Hareketler</Text>
-          {recentTransactions.length === 0 ? <Text style={styles.empty}>Henüz hareket yok.</Text> : null}
-          {recentTransactions.map((record, index) => (
-            <ListRow
-              key={`${record.date}-${record.description}-${record.amount}-${index}`}
-              title={record.description || record.category}
-              subtitle={`${record.date} · ${record.type} · ${record.paymentType}`}
-              value={currency(record.amount)}
-              tone={record.type === 'Gider' ? 'red' : 'green'}
-            />
-          ))}
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Uygulama Kayıtları</Text>
-          {recentAppRecords.length === 0 ? <Text style={styles.empty}>Uygulamadan eklenen kayıt yok.</Text> : null}
-          {recentAppRecords.map((record) => (
-            <View style={styles.deletableRow} key={record.id}>
-              <ListRow
-                title={record.customer || record.jobType}
-                subtitle={`${record.date} · ${record.employee || 'Saha'} · ${record.jobType}`}
-                value={currency(record.amount)}
-                tone="blue"
-              />
-              <Pressable style={styles.deleteButton} onPress={() => deleteRecord(record.id)} hitSlop={10}>
-                <Text style={styles.deleteText}>Sil</Text>
-              </Pressable>
-            </View>
-          ))}
-        </View>
+        {activePage === 'collection' ? (
+          <CollectionPage
+            form={form}
+            saving={saving}
+            receivables={openReceivables}
+            recentTransactions={incomeTransactions}
+            onSubmit={submitRecord}
+            onUpdateForm={updateForm}
+            onMarkCollected={confirmMarkCollected}
+          />
+        ) : null}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function SummaryPage({
+  summary,
+  recentTransactions,
+  recentAppRecords,
+  onDeleteRecord,
+}: {
+  summary: AccountingSummary | null;
+  recentTransactions: TransactionRecord[];
+  recentAppRecords: AppRecord[];
+  onDeleteRecord: (id: string) => void;
+}) {
+  return (
+    <>
+      <View style={styles.summaryGrid}>
+        <Metric label="Gelir" value={currency(summary?.totals.income ?? 0)} tone="green" />
+        <Metric label="Gider" value={currency(summary?.totals.expenses ?? 0)} tone="red" />
+        <Metric label="İşler" value={currency(summary?.totals.jobs ?? 0)} tone="blue" />
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Son Hareketler</Text>
+        {recentTransactions.length === 0 ? <Text style={styles.empty}>Henüz hareket yok.</Text> : null}
+        {recentTransactions.map((record, index) => (
+          <ListRow
+            key={`${record.date}-${record.description}-${record.amount}-${index}`}
+            title={record.description || record.category}
+            subtitle={`${record.date} · ${record.type} · ${record.paymentType}`}
+            value={currency(record.amount)}
+            tone={record.type === 'Gider' ? 'red' : 'green'}
+          />
+        ))}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Uygulama Kayıtları</Text>
+        {recentAppRecords.length === 0 ? <Text style={styles.empty}>Uygulamadan eklenen kayıt yok.</Text> : null}
+        {recentAppRecords.map((record) => (
+          <View style={styles.deletableRow} key={record.id}>
+            <ListRow
+              title={record.customer || record.jobType}
+              subtitle={`${record.date} · ${record.employee || 'Saha'} · ${record.jobType}`}
+              value={currency(record.amount)}
+              tone="blue"
+            />
+            <Pressable style={styles.deleteButton} onPress={() => onDeleteRecord(record.id)} hitSlop={10}>
+              <Text style={styles.deleteText}>Sil</Text>
+            </Pressable>
+          </View>
+        ))}
+      </View>
+    </>
+  );
+}
+
+function EntryPageView({
+  page,
+  config,
+  form,
+  saving,
+  transactions,
+  onSubmit,
+  onUpdateForm,
+}: {
+  page: EntryPage;
+  config: { title: string; subtitle: string; action: string };
+  form: FormState;
+  saving: boolean;
+  transactions: TransactionRecord[];
+  onSubmit: () => void;
+  onUpdateForm: (key: keyof FormState, value: string) => void;
+}) {
+  return (
+    <>
+      <RecordForm
+        page={page}
+        config={config}
+        form={form}
+        saving={saving}
+        onSubmit={onSubmit}
+        onUpdateForm={onUpdateForm}
+      />
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>{page === 'expense' ? 'Gider Hareketleri' : 'Gelir Hareketleri'}</Text>
+        {transactions.length === 0 ? <Text style={styles.empty}>Henüz hareket yok.</Text> : null}
+        {transactions.map((record, index) => (
+          <ListRow
+            key={`${record.date}-${record.description}-${record.amount}-${index}`}
+            title={record.description || record.category}
+            subtitle={`${record.date} · ${record.paymentType}`}
+            value={currency(record.amount)}
+            tone={page === 'expense' ? 'red' : 'green'}
+          />
+        ))}
+      </View>
+    </>
+  );
+}
+
+function CollectionPage({
+  form,
+  saving,
+  receivables,
+  recentTransactions,
+  onSubmit,
+  onUpdateForm,
+  onMarkCollected,
+}: {
+  form: FormState;
+  saving: boolean;
+  receivables: WorkRecord[];
+  recentTransactions: TransactionRecord[];
+  onSubmit: () => void;
+  onUpdateForm: (key: keyof FormState, value: string) => void;
+  onMarkCollected: (record: WorkRecord) => void;
+}) {
+  return (
+    <>
+      <RecordForm
+        page="collection"
+        config={entryConfig.collection}
+        form={form}
+        saving={saving}
+        onSubmit={onSubmit}
+        onUpdateForm={onUpdateForm}
+      />
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Açık Tahsilatlar</Text>
+        {receivables.length === 0 ? <Text style={styles.empty}>Açık tahsilat görünmüyor.</Text> : null}
+        {receivables.map((record) => (
+          <ListRow
+            key={`${record.rowNumber}-${record.customer}-${record.amount}`}
+            title={record.customer}
+            subtitle={`${record.job} · dokun, tahsil edildi yap`}
+            value={currency(record.amount)}
+            tone="orange"
+            onPress={() => onMarkCollected(record)}
+          />
+        ))}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Son Tahsilatlar</Text>
+        {recentTransactions.length === 0 ? <Text style={styles.empty}>Henüz tahsilat yok.</Text> : null}
+        {recentTransactions.map((record, index) => (
+          <ListRow
+            key={`${record.date}-${record.description}-${record.amount}-${index}`}
+            title={record.description || record.category}
+            subtitle={`${record.date} · ${record.paymentType}`}
+            value={currency(record.amount)}
+            tone="green"
+          />
+        ))}
+      </View>
+    </>
+  );
+}
+
+function RecordForm({
+  page,
+  config,
+  form,
+  saving,
+  onSubmit,
+  onUpdateForm,
+}: {
+  page: EntryPage;
+  config: { title: string; subtitle: string; action: string };
+  form: FormState;
+  saving: boolean;
+  onSubmit: () => void;
+  onUpdateForm: (key: keyof FormState, value: string) => void;
+}) {
+  return (
+    <View style={styles.formCard}>
+      <View style={styles.formHeader}>
+        <View>
+          <Text style={styles.formTitle}>{config.title}</Text>
+          <Text style={styles.formSubtitle}>{config.subtitle}</Text>
+        </View>
+        <Text style={styles.formBadge}>{form.paymentType}</Text>
+      </View>
+
+      <Input label="Eleman" value={form.employee} onChangeText={(value) => onUpdateForm('employee', value)} placeholder="Örn. Ahmet" />
+      {page !== 'expense' ? (
+        <>
+          <Input label="Müşteri" value={form.customer} onChangeText={(value) => onUpdateForm('customer', value)} placeholder="Müşteri adı" />
+          <Input label="Telefon" value={form.phone} onChangeText={(value) => onUpdateForm('phone', value)} placeholder="İsteğe bağlı" keyboardType="phone-pad" />
+          <Input
+            label="İş / İşlem"
+            value={form.category}
+            onChangeText={(value) => onUpdateForm('category', value)}
+            placeholder="Klima montajı, servis..."
+          />
+        </>
+      ) : null}
+      <Input
+        label={page === 'expense' ? 'Gider Açıklaması' : 'Açıklama'}
+        value={form.description}
+        onChangeText={(value) => onUpdateForm('description', value)}
+        placeholder={page === 'expense' ? 'Örn. yakıt, yemek, malzeme alımı' : 'Kısa açıklama'}
+      />
+      <Input label="Tutar" value={form.amount} onChangeText={(value) => onUpdateForm('amount', value)} placeholder="0" keyboardType="decimal-pad" />
+
+      <Segmented
+        label="Ödeme Türü"
+        value={form.paymentType}
+        options={[
+          ['Nakit', 'Nakit'],
+          ['Kart', 'Kart'],
+          ['Havale', 'Havale'],
+        ]}
+        onChange={(value) => onUpdateForm('paymentType', value)}
+      />
+
+      {page === 'income' ? (
+        <Segmented
+          label="Tahsilat Durumu"
+          value={form.paymentStatus}
+          options={[
+            ['Tahsil Edilmedi', 'Açık'],
+            ['Tahsil Edildi', 'Ödendi'],
+          ]}
+          onChange={(value) => onUpdateForm('paymentStatus', value as PaymentStatus)}
+        />
+      ) : null}
+
+      <Pressable style={[styles.primaryButton, saving && styles.disabled]} onPress={onSubmit} disabled={saving}>
+        <Text style={styles.primaryButtonText}>{saving ? 'Kaydediliyor' : config.action}</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -478,10 +674,10 @@ function Metric({ label, value, tone }: { label: string; value: string; tone: 'g
   );
 }
 
-function TabButton({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
+function PageTab({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
   return (
-    <Pressable style={[styles.tab, active && styles.tabActive]} onPress={onPress}>
-      <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
+    <Pressable style={[styles.pageTab, active && styles.pageTabActive]} onPress={onPress}>
+      <Text style={[styles.pageTabText, active && styles.pageTabTextActive]}>{label}</Text>
     </Pressable>
   );
 }
@@ -573,11 +769,7 @@ function ListRow({
     );
   }
 
-  return (
-    <View style={styles.listRow}>
-      {content}
-    </View>
-  );
+  return <View style={styles.listRow}>{content}</View>;
 }
 
 const styles = StyleSheet.create({
@@ -651,6 +843,32 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     padding: 12,
   },
+  pageTabs: {
+    backgroundColor: '#dfeae4',
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 5,
+    marginBottom: 12,
+    padding: 5,
+  },
+  pageTab: {
+    alignItems: 'center',
+    borderRadius: 10,
+    flex: 1,
+    minHeight: 42,
+    justifyContent: 'center',
+  },
+  pageTabActive: {
+    backgroundColor: '#ffffff',
+  },
+  pageTabText: {
+    color: '#52615b',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  pageTabTextActive: {
+    color: '#11231b',
+  },
   summaryGrid: {
     flexDirection: 'row',
     gap: 10,
@@ -688,31 +906,6 @@ const styles = StyleSheet.create({
     color: '#16231d',
     fontSize: 16,
     fontWeight: '900',
-  },
-  tabs: {
-    backgroundColor: '#dfeae4',
-    borderRadius: 14,
-    flexDirection: 'row',
-    gap: 6,
-    marginBottom: 12,
-    padding: 5,
-  },
-  tab: {
-    alignItems: 'center',
-    borderRadius: 10,
-    flex: 1,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  tabActive: {
-    backgroundColor: '#ffffff',
-  },
-  tabText: {
-    color: '#52615b',
-    fontWeight: '900',
-  },
-  tabTextActive: {
-    color: '#11231b',
   },
   formCard: {
     backgroundColor: '#ffffff',
