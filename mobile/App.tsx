@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardTypeOptions,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -13,6 +14,7 @@ import {
   View,
 } from 'react-native';
 
+type TabKey = 'income' | 'expense' | 'collection';
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
@@ -24,6 +26,15 @@ type WorkRecord = {
   status?: string;
 };
 
+type TransactionRecord = {
+  date: string;
+  type: string;
+  category: string;
+  description: string;
+  amount: number;
+  paymentType: string;
+};
+
 type AppRecord = {
   id: string;
   date: string;
@@ -32,6 +43,7 @@ type AppRecord = {
   description: string;
   amount: number;
   paymentStatus: string;
+  paymentType: string;
   employee: string;
 };
 
@@ -46,15 +58,59 @@ type AccountingSummary = {
   };
   jobs: WorkRecord[];
   receivables: WorkRecord[];
+  transactions: TransactionRecord[];
   appRecords: AppRecord[];
+};
+
+type FormState = {
+  employee: string;
+  customer: string;
+  phone: string;
+  category: string;
+  description: string;
+  amount: string;
+  paymentType: string;
+  paymentStatus: PaymentStatus;
 };
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000/api/records';
 const APP_PIN = process.env.EXPO_PUBLIC_APP_PIN ?? '';
 
-const headers = {
+const requestHeaders = {
   'Content-Type': 'application/json',
   ...(APP_PIN ? { 'x-app-pin': APP_PIN } : {}),
+};
+
+const initialForm: FormState = {
+  employee: '',
+  customer: '',
+  phone: '',
+  category: 'Klima Montajı',
+  description: '',
+  amount: '',
+  paymentType: 'Nakit',
+  paymentStatus: 'Tahsil Edilmedi',
+};
+
+const tabConfig: Record<TabKey, { title: string; subtitle: string; action: string; recordType: RecordType }> = {
+  income: {
+    title: 'Gelir',
+    subtitle: 'Yeni yapılan işi veya satışı kaydet',
+    action: 'Geliri Kaydet',
+    recordType: 'job',
+  },
+  expense: {
+    title: 'Gider',
+    subtitle: 'Yakıt, malzeme ve günlük masrafları işle',
+    action: 'Gideri Kaydet',
+    recordType: 'expense',
+  },
+  collection: {
+    title: 'Tahsilat',
+    subtitle: 'Alınan ödemeyi gelir olarak işle',
+    action: 'Tahsilatı Kaydet',
+    recordType: 'payment',
+  },
 };
 
 function currency(amount: number) {
@@ -65,26 +121,35 @@ function currency(amount: number) {
   }).format(amount);
 }
 
+function parseAmount(value: string) {
+  return Number(value.replace(/\./g, '').replace(',', '.'));
+}
+
 export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
+  const [activeTab, setActiveTab] = useState<TabKey>('income');
+  const [form, setForm] = useState<FormState>(initialForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [recordType, setRecordType] = useState<RecordType>('job');
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('Tahsil Edilmedi');
-  const [customer, setCustomer] = useState('');
-  const [phone, setPhone] = useState('');
-  const [jobType, setJobType] = useState('Klima Montajı');
-  const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState('');
-  const [paymentType, setPaymentType] = useState('Nakit');
-  const [employee, setEmployee] = useState('');
 
+  const activeConfig = tabConfig[activeTab];
   const openReceivables = useMemo(
-    () => summary?.receivables.filter((record) => record.status !== 'Tahsil Edildi').slice(0, 6) ?? [],
+    () =>
+      summary?.receivables
+        .filter((record) => record.customer && record.status !== 'Tahsil Edildi')
+        .slice(0, 6) ?? [],
     [summary],
   );
-  const recentAppRecords = useMemo(() => summary?.appRecords.slice(-8).reverse() ?? [], [summary]);
+  const recentTransactions = useMemo(
+    () =>
+      summary?.transactions
+        .filter((record) => record.date && record.type && record.amount > 0)
+        .slice(-8)
+        .reverse() ?? [],
+    [summary],
+  );
+  const recentAppRecords = useMemo(() => summary?.appRecords.slice(-6).reverse() ?? [], [summary]);
 
   const loadSummary = useCallback(async () => {
     try {
@@ -92,7 +157,7 @@ export default function App() {
       const response = await fetch(API_URL);
 
       if (!response.ok) {
-        throw new Error('Veriler alınamadı');
+        throw new Error('Veriler alınamadı.');
       }
 
       setSummary(await response.json());
@@ -107,11 +172,39 @@ export default function App() {
     loadSummary();
   }, [loadSummary]);
 
+  function updateForm(key: keyof FormState, value: string) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function resetForm() {
+    setForm((current) => ({
+      ...initialForm,
+      employee: current.employee,
+      paymentType: current.paymentType,
+      category:
+        activeTab === 'expense' ? 'Yakıt' : activeTab === 'collection' ? 'Tahsilat' : 'Klima Montajı',
+    }));
+  }
+
+  function switchTab(tab: TabKey) {
+    setActiveTab(tab);
+    setForm((current) => ({
+      ...current,
+      category: tab === 'expense' ? 'Yakıt' : tab === 'collection' ? 'Tahsilat' : 'Klima Montajı',
+      paymentStatus: tab === 'income' ? current.paymentStatus : 'Tahsil Edildi',
+    }));
+  }
+
   async function submitRecord() {
-    const numericAmount = Number(amount.replace(',', '.'));
+    const numericAmount = parseAmount(form.amount);
 
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       Alert.alert('Tutar gerekli', 'Lütfen sıfırdan büyük bir tutar gir.');
+      return;
+    }
+
+    if (activeTab !== 'expense' && !form.customer.trim()) {
+      Alert.alert('Müşteri gerekli', 'Gelir ve tahsilat kayıtlarında müşteri adı gir.');
       return;
     }
 
@@ -119,17 +212,17 @@ export default function App() {
       setSaving(true);
       const response = await fetch(API_URL, {
         method: 'POST',
-        headers,
+        headers: requestHeaders,
         body: JSON.stringify({
-          recordType,
-          customer,
-          phone,
-          jobType,
-          description,
+          recordType: activeConfig.recordType,
+          customer: form.customer,
+          phone: form.phone,
+          jobType: form.category,
+          description: form.description,
           amount: numericAmount,
-          paymentStatus,
-          paymentType,
-          employee,
+          paymentStatus: activeTab === 'income' ? form.paymentStatus : 'Tahsil Edildi',
+          paymentType: form.paymentType,
+          employee: form.employee,
         }),
       });
 
@@ -138,12 +231,9 @@ export default function App() {
         throw new Error(body.detail ?? body.error ?? 'Kayıt eklenemedi');
       }
 
-      setCustomer('');
-      setPhone('');
-      setDescription('');
-      setAmount('');
+      resetForm();
       await loadSummary();
-      Alert.alert('Kaydedildi', 'Kayıt Google Sheet tablosuna gönderildi.');
+      Alert.alert('Kaydedildi', `${activeConfig.title} kaydı Google Sheet tablosuna işlendi.`);
     } catch (caught) {
       Alert.alert('Kayıt eklenemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
     } finally {
@@ -156,7 +246,7 @@ export default function App() {
       setSaving(true);
       const response = await fetch(`${API_URL}?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers,
+        headers: requestHeaders,
       });
 
       if (!response.ok) {
@@ -174,133 +264,170 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
       <ScrollView
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSummary} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSummary} tintColor="#ffffff" />}
       >
-        <View style={styles.header}>
-          <Text style={styles.kicker}>Durukan Klima</Text>
-          <Text style={styles.title}>Saha muhasebesi</Text>
-          <Text style={styles.subtitle}>İş, gider ve tahsilat kayıtları Google Sheets tablosuna işlenir.</Text>
+        <View style={styles.hero}>
+          <Text style={styles.company}>Durukan Klima</Text>
+          <Text style={styles.title}>Muhasebe</Text>
+          <View style={styles.heroFooter}>
+            <SummaryPill label="Net" value={currency(summary?.totals.net ?? 0)} />
+            <SummaryPill label="Açık" value={currency(summary?.totals.receivables ?? 0)} />
+          </View>
         </View>
 
         {loading && !summary ? (
-          <View style={styles.center}>
-            <ActivityIndicator color="#12643d" />
+          <View style={styles.loadingBox}>
+            <ActivityIndicator color="#ffffff" />
+            <Text style={styles.loadingText}>Veriler yükleniyor</Text>
           </View>
         ) : null}
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {summary ? (
-          <>
-            {!summary.configured ? (
-              <Text style={styles.notice}>
-                Canlı yazma için web/.env.local servis hesabı bilgileri girilmeli. Şu an örnek veriler gösteriliyor.
-              </Text>
-            ) : null}
+        <View style={styles.summaryGrid}>
+          <Metric label="Gelir" value={currency(summary?.totals.income ?? 0)} tone="green" />
+          <Metric label="Gider" value={currency(summary?.totals.expenses ?? 0)} tone="red" />
+          <Metric label="İşler" value={currency(summary?.totals.jobs ?? 0)} tone="blue" />
+        </View>
 
-            <View style={styles.metrics}>
-              <Metric label="İş Toplamı" value={currency(summary.totals.jobs)} />
-              <Metric label="Tahsil Edilecek" value={currency(summary.totals.receivables)} />
-              <Metric label="Gelir" value={currency(summary.totals.income)} />
-              <Metric label="Gider" value={currency(summary.totals.expenses)} />
+        <View style={styles.tabs}>
+          <TabButton active={activeTab === 'income'} label="Gelir" onPress={() => switchTab('income')} />
+          <TabButton active={activeTab === 'expense'} label="Gider" onPress={() => switchTab('expense')} />
+          <TabButton active={activeTab === 'collection'} label="Tahsilat" onPress={() => switchTab('collection')} />
+        </View>
+
+        <View style={styles.formCard}>
+          <View style={styles.formHeader}>
+            <View>
+              <Text style={styles.formTitle}>{activeConfig.title}</Text>
+              <Text style={styles.formSubtitle}>{activeConfig.subtitle}</Text>
             </View>
+            <Text style={styles.formBadge}>{form.paymentType}</Text>
+          </View>
 
-            <View style={styles.panel}>
-              <Text style={styles.panelTitle}>Yeni Kayıt</Text>
-              <Segmented
-                value={recordType}
-                options={[
-                  ['job', 'İş'],
-                  ['payment', 'Tahsilat'],
-                  ['expense', 'Gider'],
-                ]}
-                onChange={(value) => setRecordType(value as RecordType)}
+          <Input label="Eleman" value={form.employee} onChangeText={(value) => updateForm('employee', value)} placeholder="Örn. Ahmet" />
+          {activeTab !== 'expense' ? (
+            <>
+              <Input label="Müşteri" value={form.customer} onChangeText={(value) => updateForm('customer', value)} placeholder="Müşteri adı" />
+              <Input label="Telefon" value={form.phone} onChangeText={(value) => updateForm('phone', value)} placeholder="İsteğe bağlı" keyboardType="phone-pad" />
+            </>
+          ) : null}
+          <Input
+            label={activeTab === 'expense' ? 'Gider Kategorisi' : 'İş / İşlem'}
+            value={form.category}
+            onChangeText={(value) => updateForm('category', value)}
+            placeholder={activeTab === 'expense' ? 'Yakıt, malzeme...' : 'Klima montajı, servis...'}
+          />
+          <Input label="Açıklama" value={form.description} onChangeText={(value) => updateForm('description', value)} placeholder="Kısa açıklama" />
+          <Input label="Tutar" value={form.amount} onChangeText={(value) => updateForm('amount', value)} placeholder="0" keyboardType="decimal-pad" />
+
+          <Segmented
+            label="Ödeme Türü"
+            value={form.paymentType}
+            options={[
+              ['Nakit', 'Nakit'],
+              ['Kart', 'Kart'],
+              ['Havale', 'Havale'],
+            ]}
+            onChange={(value) => updateForm('paymentType', value)}
+          />
+
+          {activeTab === 'income' ? (
+            <Segmented
+              label="Tahsilat Durumu"
+              value={form.paymentStatus}
+              options={[
+                ['Tahsil Edilmedi', 'Açık'],
+                ['Tahsil Edildi', 'Ödendi'],
+              ]}
+              onChange={(value) => updateForm('paymentStatus', value as PaymentStatus)}
+            />
+          ) : null}
+
+          <Pressable style={[styles.primaryButton, saving && styles.disabled]} onPress={submitRecord} disabled={saving}>
+            <Text style={styles.primaryButtonText}>{saving ? 'Kaydediliyor' : activeConfig.action}</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Açık Tahsilatlar</Text>
+          {openReceivables.length === 0 ? <Text style={styles.empty}>Açık tahsilat görünmüyor.</Text> : null}
+          {openReceivables.map((record) => (
+            <ListRow
+              key={`${record.customer}-${record.amount}-${record.job}`}
+              title={record.customer}
+              subtitle={record.job}
+              value={currency(record.amount)}
+              tone="orange"
+            />
+          ))}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Son Hareketler</Text>
+          {recentTransactions.length === 0 ? <Text style={styles.empty}>Henüz hareket yok.</Text> : null}
+          {recentTransactions.map((record, index) => (
+            <ListRow
+              key={`${record.date}-${record.description}-${record.amount}-${index}`}
+              title={record.description || record.category}
+              subtitle={`${record.date} · ${record.type} · ${record.paymentType}`}
+              value={currency(record.amount)}
+              tone={record.type === 'Gider' ? 'red' : 'green'}
+            />
+          ))}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Uygulama Kayıtları</Text>
+          {recentAppRecords.length === 0 ? <Text style={styles.empty}>Uygulamadan eklenen kayıt yok.</Text> : null}
+          {recentAppRecords.map((record) => (
+            <View style={styles.deletableRow} key={record.id}>
+              <ListRow
+                title={record.customer || record.jobType}
+                subtitle={`${record.date} · ${record.employee || 'Saha'} · ${record.jobType}`}
+                value={currency(record.amount)}
+                tone="blue"
               />
-              <Input label="Eleman" value={employee} onChangeText={setEmployee} placeholder="Örn. Ahmet" />
-              <Input label="Müşteri" value={customer} onChangeText={setCustomer} placeholder="Müşteri adı" />
-              <Input label="Telefon" value={phone} onChangeText={setPhone} placeholder="İsteğe bağlı" keyboardType="phone-pad" />
-              <Input label="İş / Kategori" value={jobType} onChangeText={setJobType} placeholder="Klima montajı, yakıt..." />
-              <Input label="Açıklama" value={description} onChangeText={setDescription} placeholder="Kısa açıklama" />
-              <Input label="Tutar" value={amount} onChangeText={setAmount} placeholder="0" keyboardType="decimal-pad" />
-              <Segmented
-                value={paymentType}
-                options={[
-                  ['Nakit', 'Nakit'],
-                  ['Kart', 'Kart'],
-                  ['Havale', 'Havale'],
-                ]}
-                onChange={setPaymentType}
-              />
-              {recordType === 'job' ? (
-                <Segmented
-                  value={paymentStatus}
-                  options={[
-                    ['Tahsil Edilmedi', 'Açık'],
-                    ['Tahsil Edildi', 'Ödendi'],
-                  ]}
-                  onChange={(value) => setPaymentStatus(value as PaymentStatus)}
-                />
-              ) : null}
-              <Pressable style={[styles.primaryButton, saving && styles.disabled]} onPress={submitRecord} disabled={saving}>
-                <Text style={styles.primaryButtonText}>{saving ? 'Kaydediliyor' : 'Kaydet'}</Text>
+              <Pressable style={styles.deleteButton} onPress={() => deleteRecord(record.id)} hitSlop={10}>
+                <Text style={styles.deleteText}>Sil</Text>
               </Pressable>
             </View>
-
-            <View style={styles.panel}>
-              <Text style={styles.panelTitle}>Son Uygulama Kayıtları</Text>
-              {recentAppRecords.length === 0 ? <Text style={styles.empty}>Henüz uygulamadan eklenen kayıt yok.</Text> : null}
-              {recentAppRecords.map((record) => (
-                <View style={styles.row} key={record.id}>
-                  <View style={styles.rowText}>
-                    <Text style={styles.customer} numberOfLines={1}>
-                      {record.customer}
-                    </Text>
-                    <Text style={styles.job} numberOfLines={1}>
-                      {record.jobType} · {record.employee || 'Saha'} · {record.date}
-                    </Text>
-                  </View>
-                  <View style={styles.rowActions}>
-                    <Text style={styles.amount}>{currency(record.amount)}</Text>
-                    <Pressable onPress={() => deleteRecord(record.id)} hitSlop={10}>
-                      <Text style={styles.deleteText}>Sil</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ))}
-            </View>
-
-            <View style={styles.panel}>
-              <Text style={styles.panelTitle}>Açık Tahsilatlar</Text>
-              {openReceivables.map((record) => (
-                <View style={styles.row} key={`${record.customer}-${record.amount}`}>
-                  <View style={styles.rowText}>
-                    <Text style={styles.customer} numberOfLines={1}>
-                      {record.customer}
-                    </Text>
-                    <Text style={styles.job} numberOfLines={1}>
-                      {record.job}
-                    </Text>
-                  </View>
-                  <Text style={styles.amount}>{currency(record.amount)}</Text>
-                </View>
-              ))}
-            </View>
-          </>
-        ) : null}
+          ))}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function SummaryPill({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.summaryPill}>
+      <Text style={styles.summaryPillLabel}>{label}</Text>
+      <Text style={styles.summaryPillValue}>{value}</Text>
+    </View>
+  );
+}
+
+function Metric({ label, value, tone }: { label: string; value: string; tone: 'green' | 'red' | 'blue' }) {
   return (
     <View style={styles.metric}>
+      <View style={[styles.metricDot, styles[`${tone}Dot`]]} />
       <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={styles.metricValue}>{value}</Text>
+      <Text style={styles.metricValue} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
+  );
+}
+
+function TabButton({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
+  return (
+    <Pressable style={[styles.tab, active && styles.tabActive]} onPress={onPress}>
+      <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -309,7 +436,7 @@ function Input(props: {
   value: string;
   onChangeText: (value: string) => void;
   placeholder?: string;
-  keyboardType?: 'default' | 'decimal-pad' | 'phone-pad';
+  keyboardType?: KeyboardTypeOptions;
 }) {
   return (
     <View style={styles.inputGroup}>
@@ -320,32 +447,64 @@ function Input(props: {
         onChangeText={props.onChangeText}
         placeholder={props.placeholder}
         keyboardType={props.keyboardType ?? 'default'}
-        placeholderTextColor="#8c9994"
+        placeholderTextColor="#8a958f"
       />
     </View>
   );
 }
 
 function Segmented({
+  label,
   value,
   options,
   onChange,
 }: {
+  label: string;
   value: string;
   options: [string, string][];
   onChange: (value: string) => void;
 }) {
   return (
-    <View style={styles.segmented}>
-      {options.map(([optionValue, label]) => (
-        <Pressable
-          key={optionValue}
-          style={[styles.segment, value === optionValue && styles.segmentActive]}
-          onPress={() => onChange(optionValue)}
-        >
-          <Text style={[styles.segmentText, value === optionValue && styles.segmentTextActive]}>{label}</Text>
-        </Pressable>
-      ))}
+    <View style={styles.segmentGroup}>
+      <Text style={styles.inputLabel}>{label}</Text>
+      <View style={styles.segmented}>
+        {options.map(([optionValue, optionLabel]) => (
+          <Pressable
+            key={optionValue}
+            style={[styles.segment, value === optionValue && styles.segmentActive]}
+            onPress={() => onChange(optionValue)}
+          >
+            <Text style={[styles.segmentText, value === optionValue && styles.segmentTextActive]}>{optionLabel}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function ListRow({
+  title,
+  subtitle,
+  value,
+  tone,
+}: {
+  title: string;
+  subtitle: string;
+  value: string;
+  tone: 'green' | 'red' | 'blue' | 'orange';
+}) {
+  return (
+    <View style={styles.listRow}>
+      <View style={[styles.rowMark, styles[`${tone}Mark`]]} />
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={styles.rowSubtitle} numberOfLines={1}>
+          {subtitle}
+        </Text>
+      </View>
+      <Text style={[styles.rowValue, styles[`${tone}Text`]]}>{value}</Text>
     </View>
   );
 }
@@ -353,105 +512,204 @@ function Segmented({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f4f8f6',
+    backgroundColor: '#11231b',
   },
   content: {
-    padding: 18,
-    paddingBottom: 32,
+    padding: 16,
+    paddingBottom: 34,
   },
-  header: {
-    marginBottom: 18,
+  hero: {
+    backgroundColor: '#163426',
+    borderRadius: 18,
+    marginBottom: 14,
+    overflow: 'hidden',
+    padding: 20,
   },
-  kicker: {
-    color: '#12643d',
+  company: {
+    color: '#b8d8c8',
     fontSize: 14,
     fontWeight: '800',
     marginBottom: 8,
   },
   title: {
-    color: '#17211d',
-    fontSize: 34,
+    color: '#ffffff',
+    fontSize: 38,
     fontWeight: '900',
-    lineHeight: 38,
+    letterSpacing: 0,
   },
-  subtitle: {
-    color: '#52615b',
-    fontSize: 15,
-    lineHeight: 22,
-    marginTop: 10,
-  },
-  center: {
-    padding: 32,
-  },
-  error: {
-    backgroundColor: '#fdebea',
-    borderColor: '#f2c7c2',
-    borderRadius: 8,
-    borderWidth: 1,
-    color: '#8f221b',
-    marginBottom: 12,
-    padding: 12,
-  },
-  notice: {
-    backgroundColor: '#fff8e8',
-    borderColor: '#ead9ab',
-    borderRadius: 8,
-    borderWidth: 1,
-    color: '#5b4713',
-    lineHeight: 20,
-    marginBottom: 12,
-    padding: 12,
-  },
-  metrics: {
+  heroFooter: {
+    flexDirection: 'row',
     gap: 10,
-    marginBottom: 14,
+    marginTop: 18,
   },
-  metric: {
-    backgroundColor: '#ffffff',
-    borderColor: '#d9e5df',
-    borderRadius: 8,
+  summaryPill: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 12,
     borderWidth: 1,
+    flex: 1,
+    padding: 12,
+  },
+  summaryPillLabel: {
+    color: '#b8d8c8',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  summaryPillValue: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  loadingBox: {
+    alignItems: 'center',
+    backgroundColor: '#1d3c2c',
+    borderRadius: 12,
+    gap: 8,
+    marginBottom: 12,
     padding: 16,
   },
+  loadingText: {
+    color: '#ffffff',
+    fontWeight: '800',
+  },
+  error: {
+    backgroundColor: '#ffe7e4',
+    borderRadius: 12,
+    color: '#8b1f16',
+    marginBottom: 12,
+    padding: 12,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  metric: {
+    backgroundColor: '#f8fbf9',
+    borderRadius: 14,
+    flex: 1,
+    minHeight: 92,
+    padding: 12,
+  },
+  metricDot: {
+    borderRadius: 4,
+    height: 8,
+    marginBottom: 10,
+    width: 28,
+  },
+  greenDot: {
+    backgroundColor: '#1f8b54',
+  },
+  redDot: {
+    backgroundColor: '#c4483c',
+  },
+  blueDot: {
+    backgroundColor: '#2f6fb3',
+  },
   metricLabel: {
-    color: '#67756f',
-    fontSize: 13,
-    marginBottom: 6,
+    color: '#65736c',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 5,
   },
   metricValue: {
-    color: '#15241e',
+    color: '#16231d',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  tabs: {
+    backgroundColor: '#dfeae4',
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 12,
+    padding: 5,
+  },
+  tab: {
+    alignItems: 'center',
+    borderRadius: 10,
+    flex: 1,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  tabActive: {
+    backgroundColor: '#ffffff',
+  },
+  tabText: {
+    color: '#52615b',
+    fontWeight: '900',
+  },
+  tabTextActive: {
+    color: '#11231b',
+  },
+  formCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    marginBottom: 12,
+    padding: 14,
+  },
+  formHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 6,
+  },
+  formTitle: {
+    color: '#13231b',
     fontSize: 24,
     fontWeight: '900',
   },
-  panel: {
-    backgroundColor: '#ffffff',
-    borderColor: '#d9e5df',
-    borderRadius: 8,
-    borderWidth: 1,
-    marginBottom: 14,
-    overflow: 'hidden',
+  formSubtitle: {
+    color: '#65736c',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+    maxWidth: 240,
   },
-  panelTitle: {
-    borderBottomColor: '#e5eee9',
-    borderBottomWidth: 1,
-    color: '#17211d',
-    fontSize: 18,
+  formBadge: {
+    backgroundColor: '#edf5f0',
+    borderRadius: 9,
+    color: '#12643d',
+    fontSize: 12,
     fontWeight: '900',
-    padding: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  inputGroup: {
+    marginTop: 10,
+  },
+  inputLabel: {
+    color: '#52615b',
+    fontSize: 12,
+    fontWeight: '900',
+    marginBottom: 6,
+  },
+  input: {
+    backgroundColor: '#f5f8f6',
+    borderColor: '#d6e1dc',
+    borderRadius: 11,
+    borderWidth: 1,
+    color: '#17211d',
+    minHeight: 48,
+    paddingHorizontal: 12,
+  },
+  segmentGroup: {
+    marginTop: 12,
   },
   segmented: {
     flexDirection: 'row',
     gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 14,
   },
   segment: {
     alignItems: 'center',
-    borderColor: '#cbd9d2',
-    borderRadius: 8,
+    backgroundColor: '#f5f8f6',
+    borderColor: '#d6e1dc',
+    borderRadius: 11,
     borderWidth: 1,
     flex: 1,
-    minHeight: 42,
+    minHeight: 44,
     justifyContent: 'center',
   },
   segmentActive: {
@@ -460,83 +718,113 @@ const styles = StyleSheet.create({
   },
   segmentText: {
     color: '#52615b',
-    fontWeight: '800',
+    fontWeight: '900',
   },
   segmentTextActive: {
     color: '#ffffff',
   },
-  inputGroup: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-  },
-  inputLabel: {
-    color: '#52615b',
-    fontSize: 13,
-    fontWeight: '800',
-    marginBottom: 6,
-  },
-  input: {
-    borderColor: '#cbd9d2',
-    borderRadius: 8,
-    borderWidth: 1,
-    color: '#17211d',
-    minHeight: 46,
-    paddingHorizontal: 12,
-  },
   primaryButton: {
     alignItems: 'center',
     backgroundColor: '#12643d',
-    borderRadius: 8,
-    margin: 16,
-    minHeight: 48,
+    borderRadius: 12,
+    marginTop: 16,
+    minHeight: 52,
     justifyContent: 'center',
   },
   disabled: {
-    opacity: 0.6,
+    opacity: 0.65,
   },
   primaryButtonText: {
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '900',
   },
-  empty: {
-    color: '#67756f',
-    padding: 16,
+  section: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    marginBottom: 12,
+    overflow: 'hidden',
+    paddingTop: 14,
   },
-  row: {
+  sectionTitle: {
+    color: '#16231d',
+    fontSize: 17,
+    fontWeight: '900',
+    paddingHorizontal: 14,
+    paddingBottom: 8,
+  },
+  empty: {
+    color: '#65736c',
+    padding: 14,
+  },
+  listRow: {
     alignItems: 'center',
-    borderBottomColor: '#edf3f0',
-    borderBottomWidth: 1,
+    borderTopColor: '#edf2ef',
+    borderTopWidth: 1,
     flexDirection: 'row',
-    gap: 14,
-    justifyContent: 'space-between',
-    padding: 16,
+    gap: 10,
+    minHeight: 66,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  rowMark: {
+    borderRadius: 5,
+    height: 34,
+    width: 5,
+  },
+  greenMark: {
+    backgroundColor: '#1f8b54',
+  },
+  redMark: {
+    backgroundColor: '#c4483c',
+  },
+  blueMark: {
+    backgroundColor: '#2f6fb3',
+  },
+  orangeMark: {
+    backgroundColor: '#d4822f',
   },
   rowText: {
     flex: 1,
+    minWidth: 0,
   },
-  rowActions: {
-    alignItems: 'flex-end',
-    gap: 8,
-  },
-  customer: {
-    color: '#22302b',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  job: {
-    color: '#67756f',
-    fontSize: 13,
-    marginTop: 4,
-  },
-  amount: {
-    color: '#12643d',
-    fontSize: 15,
+  rowTitle: {
+    color: '#1b2822',
+    fontSize: 14,
     fontWeight: '900',
   },
+  rowSubtitle: {
+    color: '#65736c',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  rowValue: {
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  greenText: {
+    color: '#1f8b54',
+  },
+  redText: {
+    color: '#c4483c',
+  },
+  blueText: {
+    color: '#2f6fb3',
+  },
+  orangeText: {
+    color: '#d4822f',
+  },
+  deletableRow: {
+    position: 'relative',
+  },
+  deleteButton: {
+    position: 'absolute',
+    right: 14,
+    top: 38,
+  },
   deleteText: {
-    color: '#a83224',
-    fontSize: 13,
+    color: '#b33128',
+    fontSize: 12,
     fontWeight: '900',
   },
 });
