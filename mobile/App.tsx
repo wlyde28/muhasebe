@@ -66,7 +66,7 @@ type PartnerExpense = {
   date: string;
   description: string;
   amount: number;
-  payer: 'Ben' | 'Ortağım';
+  payer: 'Durukan' | 'Şirin';
   share: number;
   status: 'Açık' | 'Kapandı';
 };
@@ -108,7 +108,7 @@ type FormState = {
   paymentType: string;
   paymentStatus: PaymentStatus;
   sharedExpense: 'Hayır' | 'Evet';
-  expensePayer: 'Ben' | 'Ortağım';
+  expensePayer: 'Durukan' | 'Şirin';
 };
 
 type ReceivableEditState = {
@@ -137,7 +137,7 @@ const initialForm: FormState = {
   paymentType: 'Nakit',
   paymentStatus: 'Tahsil Edilmedi',
   sharedExpense: 'Hayır',
-  expensePayer: 'Ben',
+  expensePayer: 'Durukan',
 };
 
 const entryConfig: Record<EntryPage, { title: string; subtitle: string; action: string; recordType: RecordType }> = {
@@ -1053,16 +1053,16 @@ function PartnerPage({ partner }: { partner?: PartnerSummary }) {
   const net = partner?.net ?? 0;
   const netText =
     net > 0
-      ? `Ortağım bana ${currency(partner?.partnerOwesYou ?? 0)} ödeyecek`
+      ? `Şirin, Durukan'a ${currency(partner?.partnerOwesYou ?? 0)} ödeyecek`
       : net < 0
-        ? `Ben ortağıma ${currency(partner?.youOwePartner ?? 0)} ödeyeceğim`
+        ? `Durukan, Şirin'e ${currency(partner?.youOwePartner ?? 0)} ödeyecek`
         : 'Mahsuplaşma dengede';
 
   return (
     <>
       <View style={styles.summaryGrid}>
-        <Metric label="Ortağım Bana" value={currency(partner?.partnerOwesYou ?? 0)} tone="green" />
-        <Metric label="Ben Ortağıma" value={currency(partner?.youOwePartner ?? 0)} tone="red" />
+        <Metric label="Şirin -> Durukan" value={currency(partner?.partnerOwesYou ?? 0)} tone="green" />
+        <Metric label="Durukan -> Şirin" value={currency(partner?.youOwePartner ?? 0)} tone="red" />
         <Metric label="Net" value={currency(Math.abs(net))} tone="blue" />
       </View>
 
@@ -1083,7 +1083,7 @@ function PartnerPage({ partner }: { partner?: PartnerSummary }) {
             title={item.description}
             subtitle={`${item.date} · ödeyen: ${item.payer} · yarısı ${currency(item.share)}`}
             value={currency(item.amount)}
-            tone={item.payer === 'Ben' ? 'green' : 'red'}
+            tone={item.payer === 'Durukan' ? 'green' : 'red'}
           />
         ))}
       </View>
@@ -1174,10 +1174,10 @@ function RecordForm({
               label="Ödemeyi Yapan"
               value={form.expensePayer}
               options={[
-                ['Ben', 'Ben'],
-                ['Ortağım', 'Ortağım'],
+                ['Durukan', 'Durukan'],
+                ['Şirin', 'Şirin'],
               ]}
-              onChange={(value) => onUpdateForm('expensePayer', value as 'Ben' | 'Ortağım')}
+              onChange={(value) => onUpdateForm('expensePayer', value as 'Durukan' | 'Şirin')}
             />
           ) : null}
         </>

@@ -77,7 +77,7 @@ export type PartnerExpense = {
   date: string;
   description: string;
   amount: number;
-  payer: "Ben" | "Ortağım";
+  payer: "Durukan" | "Şirin";
   share: number;
   status: "Açık" | "Kapandı";
 };

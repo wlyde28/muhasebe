@@ -186,7 +186,8 @@ function parsePartnerExpense(record: TransactionRecord): PartnerExpense | null {
 
   const payerMatch = record.description.match(/\[ORTAK:([^|\]]+)/);
   const statusMatch = record.description.match(/\|DURUM:([^|\]]+)/);
-  const payer = payerMatch?.[1]?.trim() === "Ortağım" ? "Ortağım" : "Ben";
+  const rawPayer = payerMatch?.[1]?.trim();
+  const payer = rawPayer === "Şirin" || rawPayer === "Ortağım" ? "Şirin" : "Durukan";
   const status = statusMatch?.[1]?.trim() === "Kapandı" ? "Kapandı" : "Açık";
   const description = record.description.replace(/\s*\[ORTAK:[^\]]+\]\s*/g, "").trim();
 
@@ -206,8 +207,8 @@ function summarizePartner(transactions: TransactionRecord[]): PartnerSummary {
     .map(parsePartnerExpense)
     .filter((item): item is PartnerExpense => Boolean(item))
     .filter((item) => item.status === "Açık");
-  const youPaid = openItems.filter((item) => item.payer === "Ben").reduce((sum, item) => sum + item.share, 0);
-  const partnerPaid = openItems.filter((item) => item.payer === "Ortağım").reduce((sum, item) => sum + item.share, 0);
+  const youPaid = openItems.filter((item) => item.payer === "Durukan").reduce((sum, item) => sum + item.share, 0);
+  const partnerPaid = openItems.filter((item) => item.payer === "Şirin").reduce((sum, item) => sum + item.share, 0);
   const net = youPaid - partnerPaid;
 
   return {
