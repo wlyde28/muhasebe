@@ -390,6 +390,7 @@ export default function App() {
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [filters, setFilters] = useState<FilterState>({ query: '', startDate: '', endDate: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -567,6 +568,8 @@ export default function App() {
 
     loadLocalAuth().catch(() => {
       setCreatingPin(true);
+    }).finally(() => {
+      setAuthReady(true);
     });
   }, []);
 
@@ -577,6 +580,13 @@ export default function App() {
         <View style={styles.loginScreen}>
           <View style={styles.loginCard}>
             <Image source={require('./assets/brand-logo.png')} style={styles.loginLogo} resizeMode="contain" />
+            {!authReady ? (
+              <>
+                <ActivityIndicator color="#ffffff" />
+                <Text style={styles.loadingText}>Giriş hazırlanıyor</Text>
+              </>
+            ) : (
+              <>
             <Text style={styles.company}>Kullanıcı</Text>
             <Text style={styles.loginTitle}>Giriş</Text>
             <Text style={styles.loginEmployeeLabel}>Eleman</Text>
@@ -626,6 +636,8 @@ export default function App() {
                 </Pressable>
               </>
             )}
+              </>
+            )}
           </View>
         </View>
       </SafeAreaView>
@@ -642,10 +654,14 @@ export default function App() {
 
   async function changeLoginEmployee(value: string) {
     const employee = value as EmployeeName;
+    setLoginEmployee(employee);
+    setSavedPin(null);
+    setCreatingPin(true);
+    setPinInput('');
+
     const pin = await SecureStore.getItemAsync(localPinKey(employee));
     const remembered = await SecureStore.getItemAsync(REMEMBER_PIN_KEY);
 
-    setLoginEmployee(employee);
     setSavedPin(pin);
     setCreatingPin(!pin);
     setPinInput(pin && remembered === 'true' ? pin : '');
