@@ -631,6 +631,48 @@ export default function App() {
     }
   }
 
+  function confirmClosePartnerExpense(record: PartnerExpense) {
+    Alert.alert(
+      'Ortak gider kapatılsın mı?',
+      `${record.description} için ${currency(record.share)} mahsuplaşma kapandı olarak işlenecek.`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        { text: 'Kapat', onPress: () => closePartnerExpense(record) },
+      ],
+    );
+  }
+
+  async function closePartnerExpense(record: PartnerExpense) {
+    if (!record.rowNumber) {
+      Alert.alert('Satır bulunamadı', 'Bu ortak giderin Google Sheets satırı belirlenemedi.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const response = await fetch(API_URL, {
+        method: 'PATCH',
+        headers: requestHeaders,
+        body: JSON.stringify({
+          action: 'close_partner_expense',
+          rowNumber: record.rowNumber,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? body.error ?? 'Ortak gider kapatılamadı');
+      }
+
+      await loadSummary();
+      Alert.alert('Kapatıldı', 'Ortak gider açık listeden kaldırıldı.');
+    } catch (caught) {
+      Alert.alert('Kapatılamadı', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -751,7 +793,7 @@ export default function App() {
         ) : null}
 
         {activePage === 'partner' ? (
-          <PartnerPage partner={summary?.partner} />
+          <PartnerPage partner={summary?.partner} saving={saving} onCloseExpense={confirmClosePartnerExpense} />
         ) : null}
 
         {activePage === 'deleted' ? (
@@ -1048,7 +1090,15 @@ function DeletedPage({ records }: { records: DeletedRecord[] }) {
   );
 }
 
-function PartnerPage({ partner }: { partner?: PartnerSummary }) {
+function PartnerPage({
+  partner,
+  saving,
+  onCloseExpense,
+}: {
+  partner?: PartnerSummary;
+  saving: boolean;
+  onCloseExpense: (record: PartnerExpense) => void;
+}) {
   const openItems = partner?.openItems ?? [];
   const net = partner?.net ?? 0;
   const netText =
@@ -1084,6 +1134,8 @@ function PartnerPage({ partner }: { partner?: PartnerSummary }) {
             subtitle={`${item.date} · ödeyen: ${item.payer} · yarısı ${currency(item.share)}`}
             value={currency(item.amount)}
             tone={item.payer === 'Durukan' ? 'green' : 'red'}
+            actionLabel={saving ? '...' : 'Kapat'}
+            onAction={() => onCloseExpense(item)}
           />
         ))}
       </View>

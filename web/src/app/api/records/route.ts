@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  closePartnerExpense,
   createAccountingRecord,
   deleteAppRecord,
   deleteReceivableRow,
@@ -122,6 +123,11 @@ export async function PATCH(request: Request) {
 
     if (body.action === "update_receivable") {
       const record = await updateReceivable(body);
+      return NextResponse.json({ record });
+    }
+
+    if (body.action === "close_partner_expense") {
+      const record = await closePartnerExpense(body);
       return NextResponse.json({ record });
     }
 

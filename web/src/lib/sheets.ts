@@ -544,6 +544,63 @@ export async function updateReceivable(payload: UpdateReceivablePayload): Promis
   return { rowNumber, customer, job, amount, status };
 }
 
+export async function closePartnerExpense(payload: RowActionPayload): Promise<PartnerExpense> {
+  if (!hasGoogleCredentials()) {
+    throw new Error("Google Sheets düzenleme işlemi için servis hesabı bilgileri gerekli.");
+  }
+
+  const rowNumber = Number(payload.rowNumber);
+
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    throw new Error("Geçerli bir ortak gider satırı seçilmedi.");
+  }
+
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+  const sheets = await getSheetsClient();
+  const rowRange = `${SHEETS.transactions}!A${rowNumber}:I${rowNumber}`;
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: rowRange,
+  });
+  const row = response.data.values?.[0] ?? [];
+  const shifted = !row[0] && !row[1] && !row[2] && Boolean(row[3] || row[4] || row[5]);
+  const offset = shifted ? 3 : 0;
+  const record: TransactionRecord = {
+    rowNumber,
+    date: row[offset] ?? "",
+    type: row[offset + 1] ?? "",
+    category: row[offset + 2] ?? "",
+    description: row[offset + 3] ?? "",
+    amount: parseAmount(row[offset + 4]),
+    paymentType: row[offset + 5] ?? "",
+  };
+  const partnerExpense = parsePartnerExpense(record);
+
+  if (!partnerExpense) {
+    throw new Error("Seçilen satır ortak gider kaydı değil.");
+  }
+
+  if (partnerExpense.status === "Kapandı") {
+    throw new Error("Bu ortak gider zaten kapalı görünüyor.");
+  }
+
+  const updatedDescription = record.description.includes("|DURUM:")
+    ? record.description.replace(/\|DURUM:[^|\]]+/, "|DURUM:Kapandı")
+    : record.description.replace(/\]$/, "|DURUM:Kapandı]");
+  const descriptionColumn = shifted ? "G" : "D";
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${SHEETS.transactions}!${descriptionColumn}${rowNumber}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[updatedDescription]],
+    },
+  });
+
+  return { ...partnerExpense, status: "Kapandı" };
+}
+
 export async function createAccountingRecord(payload: CreateRecordPayload): Promise<AppRecord> {
   if (!hasGoogleCredentials()) {
     throw new Error("Google Sheets yazma işlemi için servis hesabı bilgileri gerekli.");
