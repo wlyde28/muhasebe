@@ -158,7 +158,7 @@ Notifications.setNotificationHandler({
 });
 
 function localPinKey(employee: EmployeeName) {
-  return `durukan-local-pin-${employee}`;
+  return `durukan-local-pin-${employee === 'Şirin' ? 'sirin' : 'durukan'}`;
 }
 
 const LEGACY_LOCAL_PIN_KEY = 'durukan-local-pin';
@@ -695,31 +695,35 @@ export default function App() {
   }
 
   async function saveLocalPin() {
-    const pin = newPin.trim();
+    try {
+      const pin = newPin.trim();
 
-    if (pin.length < 4) {
-      Alert.alert('PIN kısa', 'PIN en az 4 haneli olmalı.');
-      return;
+      if (pin.length < 4) {
+        Alert.alert('PIN kısa', 'PIN en az 4 haneli olmalı.');
+        return;
+      }
+
+      if (pin !== confirmPin.trim()) {
+        Alert.alert('PIN eşleşmiyor', 'Yeni PIN ve tekrar alanı aynı olmalı.');
+        return;
+      }
+
+      await SecureStore.setItemAsync(localPinKey(loginEmployee), pin);
+      await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
+      await SecureStore.setItemAsync(REMEMBER_PIN_KEY, rememberPin ? 'true' : 'false');
+      setSavedPin(pin);
+      setPinInput(rememberPin ? pin : '');
+      setNewPin('');
+      setConfirmPin('');
+      setCreatingPin(false);
+
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      setBiometricAvailable(hasHardware && enrolled);
+      Alert.alert('PIN oluşturuldu', `${loginEmployee} için giriş PIN’i kaydedildi.`);
+    } catch (caught) {
+      Alert.alert('PIN kaydedilemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
     }
-
-    if (pin !== confirmPin.trim()) {
-      Alert.alert('PIN eşleşmiyor', 'Yeni PIN ve tekrar alanı aynı olmalı.');
-      return;
-    }
-
-    await SecureStore.setItemAsync(localPinKey(loginEmployee), pin);
-    await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
-    await SecureStore.setItemAsync(REMEMBER_PIN_KEY, rememberPin ? 'true' : 'false');
-    setSavedPin(pin);
-    setPinInput(rememberPin ? pin : '');
-    setNewPin('');
-    setConfirmPin('');
-    setCreatingPin(false);
-
-    const hasHardware = await LocalAuthentication.hasHardwareAsync();
-    const enrolled = await LocalAuthentication.isEnrolledAsync();
-    setBiometricAvailable(hasHardware && enrolled);
-    Alert.alert('PIN oluşturuldu', 'Bu cihaz için giriş PIN’i kaydedildi.');
   }
 
   async function loginWithBiometrics() {
