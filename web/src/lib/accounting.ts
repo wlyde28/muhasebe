@@ -85,7 +85,7 @@ export type PartnerExpense = {
 };
 
 export type CreateRecordPayload = {
-  recordType: "job" | "expense" | "payment";
+  recordType: "job" | "expense" | "payment" | "settlement";
   customer?: string;
   phone?: string;
   jobType?: string;

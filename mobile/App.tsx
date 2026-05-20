@@ -23,7 +23,7 @@ import {
 import Svg, { Circle, Path } from 'react-native-svg';
 
 type EntryPage = 'income' | 'expense' | 'kaplanIncome' | 'kaplanExpense';
-type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'partner' | 'customers' | 'kaplanLedger' | 'deleted';
+type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'partner' | 'settlement' | 'customers' | 'kaplanLedger' | 'deleted';
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
@@ -131,6 +131,13 @@ type FilterState = {
   endDate: string;
 };
 
+type SettlementFormState = {
+  company: 'Durukan Klima' | 'Şirin Klima';
+  amount: string;
+  description: string;
+  date: string;
+};
+
 const EMPLOYEES = ['Durukan', 'Şirin'] as const;
 type EmployeeName = (typeof EMPLOYEES)[number];
 
@@ -181,6 +188,13 @@ const initialForm: FormState = {
   expensePayer: 'Durukan',
   date: todayInput(),
   photoUri: '',
+};
+
+const initialSettlementForm: SettlementFormState = {
+  company: 'Durukan Klima',
+  amount: '',
+  description: '',
+  date: todayInput(),
 };
 
 const entryConfig: Record<EntryPage, { title: string; subtitle: string; action: string; recordType: RecordType }> = {
@@ -381,6 +395,7 @@ export default function App() {
   const [summary, setSummary] = useState<AccountingSummary | null>(null);
   const [activePage, setActivePage] = useState<PageKey>('summary');
   const [form, setForm] = useState<FormState>(initialForm);
+  const [settlementForm, setSettlementForm] = useState<SettlementFormState>(initialSettlementForm);
   const [currentEmployee, setCurrentEmployee] = useState<EmployeeName | null>(null);
   const [loginEmployee, setLoginEmployee] = useState<EmployeeName>('Durukan');
   const [pinInput, setPinInput] = useState('');
@@ -468,6 +483,15 @@ export default function App() {
   );
   const recentAppRecords = useMemo(() => summary?.appRecords.filter((record) => matchesFilter(record, filters)).slice(-6).reverse() ?? [], [summary, filters]);
   const deletedRecords = useMemo(() => summary?.deletedRecords.slice(-30).reverse() ?? [], [summary]);
+  const settlementTransactions = useMemo(
+    () =>
+      summary?.transactions
+        .filter((record) => record.type === 'Mahsup')
+        .filter((record) => matchesFilter(record, filters))
+        .slice(-30)
+        .reverse() ?? [],
+    [summary, filters],
+  );
   const kaplanOpenReceivables = useMemo(
     () =>
       summary?.receivables
@@ -650,6 +674,10 @@ export default function App() {
 
   function updateFilters(key: keyof FilterState, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateSettlementForm(key: keyof SettlementFormState, value: string) {
+    setSettlementForm((current) => ({ ...current, [key]: value }));
   }
 
   async function changeLoginEmployee(value: string) {
@@ -835,6 +863,47 @@ export default function App() {
       Alert.alert('Kaydedildi', `${activeConfig.title} kaydı Google Sheet tablosuna işlendi.`);
     } catch (caught) {
       Alert.alert('Kayıt eklenemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function submitSettlement() {
+    const numericAmount = parseAmount(settlementForm.amount);
+
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      Alert.alert('Tutar gerekli', 'Mahsuplaşma için sıfırdan büyük bir tutar gir.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: JSON.stringify({
+          recordType: 'settlement',
+          customer: settlementForm.company,
+          jobType: settlementForm.company,
+          description: settlementForm.description || `${settlementForm.company} kar payı`,
+          amount: numericAmount,
+          paymentType: 'Mahsuplaşma',
+          employee: currentEmployee ?? form.employee,
+          date: settlementForm.date,
+          note: 'Kar payı mahsuplaşması',
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? body.error ?? 'Mahsuplaşma eklenemedi');
+      }
+
+      setSettlementForm((current) => ({ ...initialSettlementForm, company: current.company, date: todayInput() }));
+      await loadSummary();
+      Alert.alert('Kaydedildi', 'Mahsuplaşma kaydı işlendi.');
+    } catch (caught) {
+      Alert.alert('Kaydedilemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
     } finally {
       setSaving(false);
     }
@@ -1284,6 +1353,7 @@ export default function App() {
           </View>
           <View style={styles.heroFooter}>
             <SummaryPill label="Net Kar" value={currency(summary?.totals.net ?? 0)} />
+            <SummaryPill label="Gider" value={currency(summary?.totals.expenses ?? 0)} />
             <SummaryPill label="Tahsil Edilmeyen" value={currency(summary?.totals.receivables ?? 0)} />
           </View>
         </View>
@@ -1306,6 +1376,7 @@ export default function App() {
           <PageTab active={activePage === 'collection'} label="Tahsilat" onPress={() => switchPage('collection')} />
           <PageTab active={activePage === 'collected'} label="Tahsil Edilen" onPress={() => switchPage('collected')} />
           <PageTab active={activePage === 'partner'} label="Ortak Hesabı" onPress={() => switchPage('partner')} />
+          <PageTab active={activePage === 'settlement'} label="Mahsuplaşma" onPress={() => switchPage('settlement')} />
           <PageTab active={activePage === 'customers'} label="Müşteri" onPress={() => switchPage('customers')} />
           <PageTab active={activePage === 'kaplanLedger'} label="Kaplan Cari" onPress={() => switchPage('kaplanLedger')} />
           <PageTab active={activePage === 'deleted'} label="Silinenler" onPress={() => switchPage('deleted')} />
@@ -1405,6 +1476,18 @@ export default function App() {
           <PartnerPage partner={summary?.partner} saving={saving} onCloseExpense={confirmClosePartnerExpense} />
         ) : null}
 
+        {activePage === 'settlement' ? (
+          <SettlementPage
+            form={settlementForm}
+            saving={saving}
+            transactions={summary?.transactions ?? []}
+            settlementTransactions={settlementTransactions}
+            collectedReceivables={summary?.receivables.filter((record) => record.status === 'Tahsil Edildi') ?? []}
+            onUpdateForm={updateSettlementForm}
+            onSubmit={submitSettlement}
+          />
+        ) : null}
+
         {activePage === 'customers' ? (
           <CustomerPage
             summary={summary}
@@ -1478,9 +1561,9 @@ function SummaryPage({
   return (
     <>
       <View style={styles.summaryGrid}>
-        <Metric label="Net Kar" value={currency(netProfit)} tone="green" />
-        <Metric label="Tahsil Edilmeyen" value={currency(summary?.totals.receivables ?? 0)} tone="orange" />
+        <Metric label="Tahsil Edilen" value={currency(collectedTotal)} tone="green" />
         <Metric label="Gider" value={currency(expensesTotal)} tone="red" />
+        <Metric label="Net Kar" value={currency(netProfit)} tone="blue" />
       </View>
 
       <View style={styles.chartSection}>
@@ -1868,6 +1951,90 @@ function PartnerPage({
             subtitle={`${item.date} · ödeyen: ${item.payer} · kapandı`}
             value={currency(item.amount)}
             tone="blue"
+          />
+        ))}
+      </View>
+    </>
+  );
+}
+
+function SettlementPage({
+  form,
+  saving,
+  transactions,
+  settlementTransactions,
+  collectedReceivables,
+  onUpdateForm,
+  onSubmit,
+}: {
+  form: SettlementFormState;
+  saving: boolean;
+  transactions: TransactionRecord[];
+  settlementTransactions: TransactionRecord[];
+  collectedReceivables: WorkRecord[];
+  onUpdateForm: (key: keyof SettlementFormState, value: string) => void;
+  onSubmit: () => void;
+}) {
+  const collectedTotal = collectedReceivables.reduce((sum, record) => sum + record.amount, 0);
+  const expensesTotal = transactions.filter((record) => record.type === 'Gider').reduce((sum, record) => sum + record.amount, 0);
+  const profitAfterExpenses = collectedTotal - expensesTotal;
+  const durukanShare = transactions
+    .filter((record) => record.type === 'Mahsup' && record.category === 'Durukan Klima')
+    .reduce((sum, record) => sum + record.amount, 0);
+  const sirinShare = transactions
+    .filter((record) => record.type === 'Mahsup' && record.category === 'Şirin Klima')
+    .reduce((sum, record) => sum + record.amount, 0);
+  const distributed = durukanShare + sirinShare;
+
+  return (
+    <>
+      <View style={styles.summaryGrid}>
+        <Metric label="Net Kar" value={currency(profitAfterExpenses)} tone="green" />
+        <Metric label="Dağıtılan" value={currency(distributed)} tone="blue" />
+        <Metric label="Kalan" value={currency(profitAfterExpenses - distributed)} tone="orange" />
+      </View>
+
+      <View style={styles.summaryGrid}>
+        <Metric label="Durukan Klima" value={currency(durukanShare)} tone="blue" />
+        <Metric label="Şirin Klima" value={currency(sirinShare)} tone="orange" />
+        <Metric label="Gider" value={currency(expensesTotal)} tone="red" />
+      </View>
+
+      <View style={styles.formCard}>
+        <View style={styles.formHeader}>
+          <View>
+            <Text style={styles.formTitle}>Mahsuplaşma</Text>
+            <Text style={styles.formSubtitle}>Net kardan Durukan Klima ve Şirin Klima payını işle</Text>
+          </View>
+          <Text style={styles.formBadge}>{form.company}</Text>
+        </View>
+        <Segmented
+          label="Firma"
+          value={form.company}
+          options={[
+            ['Durukan Klima', 'Durukan'],
+            ['Şirin Klima', 'Şirin'],
+          ]}
+          onChange={(value) => onUpdateForm('company', value as SettlementFormState['company'])}
+        />
+        <Input label="Tarih" value={form.date} onChangeText={(value) => onUpdateForm('date', value)} placeholder="YYYY-AA-GG" />
+        <Input label="Açıklama" value={form.description} onChangeText={(value) => onUpdateForm('description', value)} placeholder="Kar payı, aylık paylaşım..." />
+        <Input label="Tutar" value={form.amount} onChangeText={(value) => onUpdateForm('amount', value)} placeholder="0" keyboardType="decimal-pad" />
+        <Pressable style={[styles.primaryButton, saving && styles.disabled]} onPress={onSubmit} disabled={saving}>
+          <Text style={styles.primaryButtonText}>{saving ? 'Kaydediliyor' : 'Mahsuplaşmayı Kaydet'}</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Mahsuplaşma Geçmişi</Text>
+        {settlementTransactions.length === 0 ? <Text style={styles.empty}>Henüz mahsuplaşma kaydı yok.</Text> : null}
+        {settlementTransactions.map((record, index) => (
+          <ListRow
+            key={`${record.rowNumber}-${record.category}-${index}`}
+            title={record.category}
+            subtitle={`${record.date} · ${record.description || 'Kar payı'}`}
+            value={currency(record.amount)}
+            tone={record.category === 'Durukan Klima' ? 'blue' : 'orange'}
           />
         ))}
       </View>

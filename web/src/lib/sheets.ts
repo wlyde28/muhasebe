@@ -443,7 +443,9 @@ function normalizePayload(payload: CreateRecordPayload): Required<CreateRecordPa
     recordType: payload.recordType,
     customer: payload.customer?.trim() || "Genel",
     phone: payload.phone?.trim() || "",
-    jobType: payload.jobType?.trim() || (payload.recordType === "expense" ? "Gider" : "İş"),
+    jobType:
+      payload.jobType?.trim() ||
+      (payload.recordType === "expense" ? "Gider" : payload.recordType === "settlement" ? "Mahsuplaşma" : "İş"),
     description: payload.description?.trim() || "",
     amount,
     paymentStatus: payload.paymentStatus ?? (payload.recordType === "expense" ? "Tahsil Edildi" : "Tahsil Edilmedi"),
@@ -841,6 +843,17 @@ export async function createAccountingRecord(payload: CreateRecordPayload): Prom
       date,
       "Gelir",
       "Tahsilat",
+      record.description || record.customer,
+      record.amount,
+      record.paymentType,
+    ]);
+  }
+
+  if (record.recordType === "settlement") {
+    await appendTransactionRow(sheets, spreadsheetId, [
+      date,
+      "Mahsup",
+      record.jobType,
       record.description || record.customer,
       record.amount,
       record.paymentType,
