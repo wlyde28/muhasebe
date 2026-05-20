@@ -1485,6 +1485,7 @@ export default function App() {
             collectedReceivables={summary?.receivables.filter((record) => record.status === 'Tahsil Edildi') ?? []}
             onUpdateForm={updateSettlementForm}
             onSubmit={submitSettlement}
+            onDeleteSettlement={confirmDeleteTransaction}
           />
         ) : null}
 
@@ -1966,6 +1967,7 @@ function SettlementPage({
   collectedReceivables,
   onUpdateForm,
   onSubmit,
+  onDeleteSettlement,
 }: {
   form: SettlementFormState;
   saving: boolean;
@@ -1974,6 +1976,7 @@ function SettlementPage({
   collectedReceivables: WorkRecord[];
   onUpdateForm: (key: keyof SettlementFormState, value: string) => void;
   onSubmit: () => void;
+  onDeleteSettlement: (record: TransactionRecord) => void;
 }) {
   const collectedTotal = collectedReceivables.reduce((sum, record) => sum + record.amount, 0);
   const expensesTotal = transactions.filter((record) => record.type === 'Gider').reduce((sum, record) => sum + record.amount, 0);
@@ -2035,6 +2038,8 @@ function SettlementPage({
             subtitle={`${record.date} · ${record.description || 'Kar payı'}`}
             value={currency(record.amount)}
             tone={record.category === 'Durukan Klima' ? 'blue' : 'orange'}
+            actionLabel="Sil"
+            onAction={() => onDeleteSettlement(record)}
           />
         ))}
       </View>
