@@ -5,11 +5,14 @@ import {
   deleteAppRecord,
   deleteReceivableRow,
   deleteTransactionRow,
+  createUserPin,
   getAccountingSummary,
+  getUserPinStatus,
   markReceivableCollected,
   markReceivableUncollected,
   restoreDeletedRecord,
   updateReceivable,
+  verifyUserPin,
 } from "@/lib/sheets";
 
 function checkPin(request: Request): NextResponse | null {
@@ -123,6 +126,21 @@ export async function PATCH(request: Request) {
     if (body.action === "mark_receivable_collected") {
       const record = await markReceivableCollected(body);
       return NextResponse.json({ record });
+    }
+
+    if (body.action === "get_user_pin_status") {
+      const auth = await getUserPinStatus(body);
+      return NextResponse.json({ auth });
+    }
+
+    if (body.action === "create_user_pin") {
+      const auth = await createUserPin(body);
+      return NextResponse.json({ auth }, { status: 201 });
+    }
+
+    if (body.action === "verify_user_pin") {
+      const auth = await verifyUserPin(body);
+      return NextResponse.json({ auth });
     }
 
     if (body.action === "mark_receivable_uncollected") {

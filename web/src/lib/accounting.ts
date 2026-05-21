@@ -126,6 +126,16 @@ export type RestoreDeletedPayload = {
   deletedRowNumber?: number;
 };
 
+export type UserPinPayload = {
+  employee?: string;
+  pin?: string;
+};
+
+export type UserPinStatus = {
+  employee: string;
+  hasPin: boolean;
+};
+
 export function parseAmount(value: unknown): number {
   if (typeof value === "number") {
     return value;

@@ -1,5 +1,5 @@
 import { google } from "googleapis";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import type {
   AccountingSummary,
   AppRecord,
@@ -12,6 +12,8 @@ import type {
   RowActionPayload,
   TransactionRecord,
   UpdateReceivablePayload,
+  UserPinPayload,
+  UserPinStatus,
   WorkRecord,
 } from "./accounting";
 import { parseAmount } from "./accounting";
@@ -25,6 +27,7 @@ const SHEETS = {
   appRecords: "App Kayıtları",
   deletedRecords: "Silinen Kayıtlar",
 };
+const USER_PINS_SHEET = "Kullanici PINleri";
 
 function cleanEnv(value: string | undefined): string {
   return String(value ?? "").replace(/^\uFEFF/, "").trim();
@@ -357,6 +360,83 @@ function nowTr(): string {
   }).format(new Date());
 }
 
+function normalizeEmployee(value: unknown): string {
+  const employee = String(value ?? "").trim();
+
+  if (!employee) {
+    throw new Error("Kullanici gerekli.");
+  }
+
+  return employee;
+}
+
+function normalizePin(value: unknown): string {
+  const pin = String(value ?? "").trim();
+
+  if (pin.length < 4) {
+    throw new Error("PIN en az 4 haneli olmali.");
+  }
+
+  return pin;
+}
+
+function hashPin(pin: string, salt: string): string {
+  return scryptSync(pin, salt, 32).toString("hex");
+}
+
+function verifyPinHash(pin: string, salt: string, hash: string): boolean {
+  const expected = Buffer.from(hash, "hex");
+  const actual = Buffer.from(hashPin(pin, salt), "hex");
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+async function ensureUserPinsSheet(
+  sheets: Awaited<ReturnType<typeof getSheetsClient>>,
+  spreadsheetId: string,
+): Promise<void> {
+  const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+  const exists = metadata.data.sheets?.some((sheet) => sheet.properties?.title === USER_PINS_SHEET);
+
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: USER_PINS_SHEET } } }],
+      },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${USER_PINS_SHEET}'!A1:D1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [["Kullanici", "Salt", "PIN Hash", "Guncelleme Tarihi"]],
+      },
+    });
+  }
+}
+
+async function readUserPinRows(sheets: Awaited<ReturnType<typeof getSheetsClient>>, spreadsheetId: string): Promise<string[][]> {
+  await ensureUserPinsSheet(sheets, spreadsheetId);
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${USER_PINS_SHEET}'!A:D`,
+  });
+
+  return rowsFromRange(response.data.values as string[][] | undefined);
+}
+
+function findUserPinRow(rows: string[][], employee: string): { rowNumber: number; row: string[] } | null {
+  const normalizedEmployee = employee.toLocaleLowerCase("tr-TR");
+  const index = rows.slice(1).findIndex((row) => String(row[0] ?? "").trim().toLocaleLowerCase("tr-TR") === normalizedEmployee);
+
+  if (index < 0) {
+    return null;
+  }
+
+  return { rowNumber: index + 2, row: rows[index + 1] };
+}
+
 async function ensureDeletedSheet(
   sheets: Awaited<ReturnType<typeof getSheetsClient>>,
   spreadsheetId: string,
@@ -619,6 +699,74 @@ export async function markReceivableUncollected(payload: RowActionPayload): Prom
   });
 
   return { ...record, status: "Tahsil Edilmedi" };
+}
+
+export async function getUserPinStatus(payload: UserPinPayload): Promise<UserPinStatus> {
+  const employee = normalizeEmployee(payload.employee);
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+
+  if (!hasGoogleCredentials()) {
+    return { employee, hasPin: false };
+  }
+
+  const sheets = await getSheetsClient();
+  const rows = await readUserPinRows(sheets, spreadsheetId);
+
+  return { employee, hasPin: Boolean(findUserPinRow(rows, employee)) };
+}
+
+export async function createUserPin(payload: UserPinPayload): Promise<UserPinStatus> {
+  const employee = normalizeEmployee(payload.employee);
+  const pin = normalizePin(payload.pin);
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+
+  if (!hasGoogleCredentials()) {
+    return { employee, hasPin: true };
+  }
+
+  const sheets = await getSheetsClient();
+  const rows = await readUserPinRows(sheets, spreadsheetId);
+
+  if (findUserPinRow(rows, employee)) {
+    throw new Error("Bu kullanici icin PIN zaten olusturulmus.");
+  }
+
+  const salt = randomBytes(16).toString("hex");
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${USER_PINS_SHEET}'!A:D`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: {
+      values: [[employee, salt, hashPin(pin, salt), nowTr()]],
+    },
+  });
+
+  return { employee, hasPin: true };
+}
+
+export async function verifyUserPin(payload: UserPinPayload): Promise<UserPinStatus> {
+  const employee = normalizeEmployee(payload.employee);
+  const pin = normalizePin(payload.pin);
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+
+  if (!hasGoogleCredentials()) {
+    return { employee, hasPin: true };
+  }
+
+  const sheets = await getSheetsClient();
+  const rows = await readUserPinRows(sheets, spreadsheetId);
+  const existing = findUserPinRow(rows, employee);
+
+  if (!existing) {
+    throw new Error("Bu kullanici icin PIN olusturulmamis.");
+  }
+
+  if (!verifyPinHash(pin, existing.row[1] ?? "", existing.row[2] ?? "")) {
+    throw new Error("PIN hatali.");
+  }
+
+  return { employee, hasPin: true };
 }
 
 export async function updateReceivable(payload: UpdateReceivablePayload): Promise<WorkRecord> {

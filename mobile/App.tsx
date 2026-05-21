@@ -411,6 +411,7 @@ export default function App() {
   const [pinInput, setPinInput] = useState('');
   const [savedPin, setSavedPin] = useState<string | null>(null);
   const [rememberPin, setRememberPin] = useState(false);
+  const [serverPinExists, setServerPinExists] = useState(false);
   const [creatingPin, setCreatingPin] = useState(false);
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -578,6 +579,7 @@ export default function App() {
       ]);
       const employee = EMPLOYEES.includes(rememberedEmployee as EmployeeName) ? (rememberedEmployee as EmployeeName) : 'Durukan';
       let storedPin = await SecureStore.getItemAsync(localPinKey(employee));
+      const pinStatus = await fetchPinStatus(employee);
 
       if (!storedPin) {
         const legacyPin = await SecureStore.getItemAsync(LEGACY_LOCAL_PIN_KEY);
@@ -590,12 +592,13 @@ export default function App() {
       }
 
       setSavedPin(storedPin);
-      setCreatingPin(!storedPin);
+      setServerPinExists(pinStatus.hasPin);
+      setCreatingPin(!pinStatus.hasPin);
       setRememberPin(remembered === 'true');
       setLoginEmployee(employee);
-      setBiometricAvailable(Boolean(storedPin && hasHardware && enrolled));
+      setBiometricAvailable(Boolean(pinStatus.hasPin && storedPin && hasHardware && enrolled));
 
-      if (storedPin && remembered === 'true') {
+      if (pinStatus.hasPin && storedPin && remembered === 'true') {
         setPinInput(storedPin);
       }
     }
@@ -665,9 +668,9 @@ export default function App() {
                     <Text style={styles.secondaryButtonText}>Parmak İzi ile Giriş</Text>
                   </Pressable>
                 ) : null}
-                <Pressable style={styles.secondaryButtonFull} onPress={() => setCreatingPin(true)}>
+                {!serverPinExists ? <Pressable style={styles.secondaryButtonFull} onPress={() => setCreatingPin(true)}>
                   <Text style={styles.secondaryButtonText}>PIN Oluştur / Değiştir</Text>
-                </Pressable>
+                </Pressable> : null}
               </>
             )}
               </>
@@ -690,6 +693,35 @@ export default function App() {
     setSettlementForm((current) => ({ ...current, [key]: value }));
   }
 
+  async function readAuthResponse(response: Response, fallback: string) {
+    const body = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(body?.detail ?? body?.error ?? fallback);
+    }
+
+    return body;
+  }
+
+  async function fetchPinStatus(employee: EmployeeName): Promise<{ hasPin: boolean }> {
+    const response = await fetch(API_URL, {
+      method: 'PATCH',
+      headers: requestHeaders,
+      body: JSON.stringify({ action: 'get_user_pin_status', employee }),
+    });
+    const body = await readAuthResponse(response, 'PIN durumu okunamadı');
+    return { hasPin: Boolean(body.auth?.hasPin) };
+  }
+
+  async function verifyServerPin(employee: EmployeeName, pin: string) {
+    const response = await fetch(API_URL, {
+      method: 'PATCH',
+      headers: requestHeaders,
+      body: JSON.stringify({ action: 'verify_user_pin', employee, pin }),
+    });
+    await readAuthResponse(response, 'PIN doğrulanamadı');
+  }
+
   async function changeLoginEmployee(value: string) {
     const employee = value as EmployeeName;
     setLoginEmployee(employee);
@@ -697,12 +729,19 @@ export default function App() {
     setCreatingPin(true);
     setPinInput('');
 
-    const pin = await SecureStore.getItemAsync(localPinKey(employee));
-    const remembered = await SecureStore.getItemAsync(REMEMBER_PIN_KEY);
+    const [pin, remembered, pinStatus, hasHardware, enrolled] = await Promise.all([
+      SecureStore.getItemAsync(localPinKey(employee)),
+      SecureStore.getItemAsync(REMEMBER_PIN_KEY),
+      fetchPinStatus(employee),
+      LocalAuthentication.hasHardwareAsync(),
+      LocalAuthentication.isEnrolledAsync(),
+    ]);
 
     setSavedPin(pin);
-    setCreatingPin(!pin);
-    setPinInput(pin && remembered === 'true' ? pin : '');
+    setServerPinExists(pinStatus.hasPin);
+    setCreatingPin(!pinStatus.hasPin);
+    setBiometricAvailable(Boolean(pinStatus.hasPin && pin && hasHardware && enrolled));
+    setPinInput(pinStatus.hasPin && pin && remembered === 'true' ? pin : '');
   }
 
   function completeLogin(employee: EmployeeName) {
@@ -711,25 +750,34 @@ export default function App() {
   }
 
   async function login() {
-    if (!savedPin) {
-      Alert.alert('PIN gerekli', 'Önce bu cihaz için bir PIN oluştur.');
+    const serverPin = pinInput.trim();
+
+    if (!serverPinExists) {
+      Alert.alert('PIN gerekli', 'Önce bu kullanıcı için bir PIN oluştur.');
       setCreatingPin(true);
       return;
     }
 
-    if (pinInput.trim() !== savedPin) {
-      Alert.alert('PIN hatalı', 'Lütfen uygulama PIN kodunu kontrol et.');
+    if (serverPin.length < 4) {
+      Alert.alert('PIN gerekli', 'Lütfen uygulama PIN kodunu gir.');
       return;
     }
 
-    await SecureStore.setItemAsync(REMEMBER_PIN_KEY, rememberPin ? 'true' : 'false');
-    await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
+    try {
+      await verifyServerPin(loginEmployee, serverPin);
+      await SecureStore.setItemAsync(localPinKey(loginEmployee), serverPin);
+      await SecureStore.setItemAsync(REMEMBER_PIN_KEY, rememberPin ? 'true' : 'false');
+      await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
+      setSavedPin(serverPin);
 
-    if (!rememberPin) {
-      setPinInput('');
+      if (!rememberPin) {
+        setPinInput('');
+      }
+
+      completeLogin(loginEmployee);
+    } catch (caught) {
+      Alert.alert('PIN hatalı', caught instanceof Error ? caught.message : 'Lütfen uygulama PIN kodunu kontrol et.');
     }
-
-    completeLogin(loginEmployee);
   }
 
   async function saveLocalPin() {
@@ -746,9 +794,17 @@ export default function App() {
         return;
       }
 
+      const response = await fetch(API_URL, {
+        method: 'PATCH',
+        headers: requestHeaders,
+        body: JSON.stringify({ action: 'create_user_pin', employee: loginEmployee, pin }),
+      });
+      await readAuthResponse(response, 'PIN oluşturulamadı');
+
       await SecureStore.setItemAsync(localPinKey(loginEmployee), pin);
       await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
       await SecureStore.setItemAsync(REMEMBER_PIN_KEY, rememberPin ? 'true' : 'false');
+      setServerPinExists(true);
       setSavedPin(pin);
       setPinInput(rememberPin ? pin : '');
       setNewPin('');
@@ -765,23 +821,29 @@ export default function App() {
   }
 
   async function loginWithBiometrics() {
-    if (!savedPin) {
-      Alert.alert('PIN gerekli', 'Biyometrik girişten önce PIN oluştur.');
+    if (!serverPinExists || !savedPin) {
+      Alert.alert('PIN gerekli', 'Parmak izi girişinden önce bu cihazda PIN ile giriş yap.');
       return;
     }
 
-    const result = await LocalAuthentication.authenticateAsync({
+    const biometricResult = await LocalAuthentication.authenticateAsync({
       promptMessage: 'Muhasebe girişini onayla',
       cancelLabel: 'Vazgeç',
       fallbackLabel: 'PIN kullan',
     });
 
-    if (!result.success) {
+    if (!biometricResult.success) {
       return;
     }
 
-    await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
-    completeLogin(loginEmployee);
+    try {
+      await verifyServerPin(loginEmployee, savedPin);
+      await SecureStore.setItemAsync(REMEMBER_EMPLOYEE_KEY, loginEmployee);
+      completeLogin(loginEmployee);
+    } catch (caught) {
+      Alert.alert('PIN doğrulanamadı', caught instanceof Error ? caught.message : 'PIN tekrar girilmeli.');
+      setPinInput('');
+    }
   }
 
   function defaultCategory(page: EntryPage) {
