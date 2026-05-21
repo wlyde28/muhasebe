@@ -23,7 +23,17 @@ import {
 import Svg, { Circle, Path } from 'react-native-svg';
 
 type EntryPage = 'income' | 'expense' | 'kaplanIncome' | 'kaplanExpense';
-type PageKey = 'summary' | EntryPage | 'collection' | 'collected' | 'partner' | 'settlement' | 'customers' | 'kaplanLedger' | 'deleted';
+type PageKey =
+  | 'summary'
+  | EntryPage
+  | 'settlement'
+  | 'collection'
+  | 'collected'
+  | 'more'
+  | 'partner'
+  | 'customers'
+  | 'kaplanLedger'
+  | 'deleted';
 type RecordType = 'job' | 'expense' | 'payment';
 type PaymentStatus = 'Tahsil Edilmedi' | 'Tahsil Edildi';
 
@@ -1371,15 +1381,12 @@ export default function App() {
           <PageTab active={activePage === 'summary'} label="Özet" onPress={() => switchPage('summary')} />
           <PageTab active={activePage === 'income'} label="Gelir" onPress={() => switchPage('income')} />
           <PageTab active={activePage === 'expense'} label="Gider" onPress={() => switchPage('expense')} />
+          <PageTab active={activePage === 'settlement'} label="Mahsuplaşma" onPress={() => switchPage('settlement')} />
           <PageTab active={activePage === 'kaplanIncome'} label="Kaplan Gelir" onPress={() => switchPage('kaplanIncome')} />
           <PageTab active={activePage === 'kaplanExpense'} label="Kaplan Gider" onPress={() => switchPage('kaplanExpense')} />
-          <PageTab active={activePage === 'collection'} label="Tahsilat" onPress={() => switchPage('collection')} />
-          <PageTab active={activePage === 'collected'} label="Tahsil Edilen" onPress={() => switchPage('collected')} />
-          <PageTab active={activePage === 'partner'} label="Ortak Hesabı" onPress={() => switchPage('partner')} />
-          <PageTab active={activePage === 'settlement'} label="Mahsuplaşma" onPress={() => switchPage('settlement')} />
-          <PageTab active={activePage === 'customers'} label="Müşteri" onPress={() => switchPage('customers')} />
-          <PageTab active={activePage === 'kaplanLedger'} label="Kaplan Cari" onPress={() => switchPage('kaplanLedger')} />
-          <PageTab active={activePage === 'deleted'} label="Silinenler" onPress={() => switchPage('deleted')} />
+          <PageTab active={activePage === 'collection'} label="Açık Tahsilat" onPress={() => switchPage('collection')} />
+          <PageTab active={activePage === 'collected'} label="Tahsilat" onPress={() => switchPage('collected')} />
+          <PageTab active={activePage === 'more'} label="Diğer" onPress={() => switchPage('more')} />
         </View>
 
         <FilterPanel filters={filters} onChange={updateFilters} onClear={() => setFilters({ query: '', startDate: '', endDate: '' })} />
@@ -1488,6 +1495,8 @@ export default function App() {
             onDeleteSettlement={confirmDeleteTransaction}
           />
         ) : null}
+
+        {activePage === 'more' ? <MorePage onNavigate={switchPage} /> : null}
 
         {activePage === 'customers' ? (
           <CustomerPage
@@ -2044,6 +2053,30 @@ function SettlementPage({
         ))}
       </View>
     </>
+  );
+}
+
+function MorePage({ onNavigate }: { onNavigate: (page: PageKey) => void }) {
+  const items: Array<{ label: string; description: string; page: PageKey }> = [
+    { label: 'Ortak Hesabı', description: 'Durukan ve Şirin ortak gider kapatma', page: 'partner' },
+    { label: 'Müşteri', description: 'Müşteri bazlı gelir, tahsilat ve bakiye', page: 'customers' },
+    { label: 'Kaplan Cari', description: 'Kaplan Teknik gelir gider özeti', page: 'kaplanLedger' },
+    { label: 'Silinenler', description: 'Silinen kayıtları gör ve geri yükle', page: 'deleted' },
+  ];
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>Diğer</Text>
+      {items.map((item) => (
+        <Pressable key={item.page} style={({ pressed }) => [styles.moreRow, pressed && styles.rowPressed]} onPress={() => onNavigate(item.page)}>
+          <View>
+            <Text style={styles.moreTitle}>{item.label}</Text>
+            <Text style={styles.moreDescription}>{item.description}</Text>
+          </View>
+          <Text style={styles.moreArrow}>›</Text>
+        </Pressable>
+      ))}
+    </View>
   );
 }
 
@@ -2971,6 +3004,33 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     overflow: 'hidden',
     paddingTop: 14,
+  },
+  moreRow: {
+    alignItems: 'center',
+    borderTopColor: '#edf2ef',
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 66,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  moreTitle: {
+    color: '#16231d',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  moreDescription: {
+    color: '#65736c',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  moreArrow: {
+    color: '#12643d',
+    fontSize: 24,
+    fontWeight: '900',
+    paddingLeft: 10,
   },
   chartSection: {
     backgroundColor: '#ffffff',
