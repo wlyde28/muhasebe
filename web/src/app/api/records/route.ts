@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   closePartnerExpense,
+  closeMonth,
   createAccountingRecord,
   deleteAppRecord,
   deleteReceivableRow,
@@ -11,6 +12,7 @@ import {
   markReceivableCollected,
   markReceivableUncollected,
   restoreDeletedRecord,
+  resetUserPin,
   updateReceivable,
   verifyUserPin,
 } from "@/lib/sheets";
@@ -143,6 +145,11 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ auth });
     }
 
+    if (body.action === "reset_user_pin") {
+      const auth = await resetUserPin(body);
+      return NextResponse.json({ auth });
+    }
+
     if (body.action === "mark_receivable_uncollected") {
       const record = await markReceivableUncollected(body);
       return NextResponse.json({ record });
@@ -161,6 +168,11 @@ export async function PATCH(request: Request) {
     if (body.action === "restore_deleted") {
       await restoreDeletedRecord(body);
       return NextResponse.json({ ok: true });
+    }
+
+    if (body.action === "close_month") {
+      const closing = await closeMonth(body);
+      return NextResponse.json({ closing });
     }
 
     return NextResponse.json({ error: "Bilinmeyen işlem." }, { status: 400 });

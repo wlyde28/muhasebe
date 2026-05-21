@@ -35,6 +35,7 @@ export type AccountingSummary = {
   appRecords: AppRecord[];
   deletedRecords: DeletedRecord[];
   partner: PartnerSummary;
+  monthlyClosings: MonthlyClosing[];
   generatedAt: string;
 };
 
@@ -129,11 +130,32 @@ export type RestoreDeletedPayload = {
 export type UserPinPayload = {
   employee?: string;
   pin?: string;
+  adminPassword?: string;
 };
 
 export type UserPinStatus = {
   employee: string;
   hasPin: boolean;
+};
+
+export type MonthlyClosing = {
+  rowNumber?: number;
+  month: string;
+  income: number;
+  expenses: number;
+  receivables: number;
+  net: number;
+  closedBy: string;
+  closedAt: string;
+};
+
+export type CloseMonthPayload = {
+  month?: string;
+  income?: number;
+  expenses?: number;
+  receivables?: number;
+  net?: number;
+  closedBy?: string;
 };
 
 export function parseAmount(value: unknown): number {

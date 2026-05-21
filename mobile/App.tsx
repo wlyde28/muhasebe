@@ -118,6 +118,18 @@ type AccountingSummary = {
   appRecords: AppRecord[];
   deletedRecords: DeletedRecord[];
   partner: PartnerSummary;
+  monthlyClosings: MonthlyClosing[];
+};
+
+type MonthlyClosing = {
+  rowNumber?: number;
+  month: string;
+  income: number;
+  expenses: number;
+  receivables: number;
+  net: number;
+  closedBy: string;
+  closedAt: string;
 };
 
 type FormState = {
@@ -148,6 +160,12 @@ type SettlementFormState = {
   date: string;
 };
 
+type OfflineRecord = {
+  id: string;
+  createdAt: string;
+  payload: Record<string, unknown>;
+};
+
 const EMPLOYEES = ['Durukan', 'Şirin'] as const;
 type EmployeeName = (typeof EMPLOYEES)[number];
 
@@ -164,6 +182,7 @@ const APP_PIN = process.env.EXPO_PUBLIC_APP_PIN ?? '1234';
 const REMEMBER_PIN_KEY = 'durukan-remember-pin';
 const REMEMBER_EMPLOYEE_KEY = 'durukan-remember-employee';
 const NOTIFY_DATE_KEY = 'durukan-last-receivable-notification';
+const OFFLINE_QUEUE_KEY = 'durukan-offline-record-queue';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -300,6 +319,10 @@ function parseAmount(value: string) {
   return Number(value.replace(/\./g, '').replace(',', '.'));
 }
 
+function isNetworkFailure(error: unknown) {
+  return error instanceof TypeError || String(error).toLocaleLowerCase('tr-TR').includes('network request failed');
+}
+
 function isKaplanRecord(record: Pick<TransactionRecord, 'category' | 'description'>) {
   const text = `${record.category} ${record.description}`.toLocaleLowerCase('tr-TR');
   return text.includes('kaplan teknik');
@@ -377,6 +400,60 @@ function monthlyReportHtml(month: string, transactions: TransactionRecord[]) {
   `;
 }
 
+function customerStatementHtml(customer: string, receivables: WorkRecord[], appRecords: AppRecord[]) {
+  const openTotal = receivables.filter((record) => record.status !== 'Tahsil Edildi').reduce((sum, record) => sum + record.amount, 0);
+  const collectedTotal = receivables.filter((record) => record.status === 'Tahsil Edildi').reduce((sum, record) => sum + record.amount, 0);
+  const rows = [
+    ...receivables.map((record) => ({
+      date: record.date || '',
+      title: record.job,
+      status: record.status || 'Durum yok',
+      amount: record.amount,
+    })),
+    ...appRecords.map((record) => ({
+      date: record.date,
+      title: record.description || record.jobType,
+      status: record.paymentStatus,
+      amount: record.amount,
+    })),
+  ];
+
+  return `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #16231d; }
+          h1 { margin-bottom: 4px; }
+          .summary { display: flex; gap: 12px; margin: 18px 0; }
+          .box { border: 1px solid #dfe8e3; border-radius: 8px; padding: 12px; flex: 1; }
+          table { border-collapse: collapse; width: 100%; }
+          th, td { border-bottom: 1px solid #e8eee9; padding: 10px; text-align: left; }
+          th { background: #f3f7f5; }
+          .amount { text-align: right; font-weight: 700; }
+        </style>
+      </head>
+      <body>
+        <h1>${customer} Cari Ekstresi</h1>
+        <p>Oluşturma: ${new Date().toLocaleDateString('tr-TR')}</p>
+        <div class="summary">
+          <div class="box"><strong>Açık Borç</strong><br />${currency(openTotal)}</div>
+          <div class="box"><strong>Tahsil Edilen</strong><br />${currency(collectedTotal)}</div>
+          <div class="box"><strong>Kayıt</strong><br />${rows.length}</div>
+        </div>
+        <table>
+          <thead><tr><th>Tarih</th><th>İşlem</th><th>Durum</th><th class="amount">Tutar</th></tr></thead>
+          <tbody>
+            ${rows
+              .map((record) => `<tr><td>${record.date}</td><td>${record.title}</td><td>${record.status}</td><td class="amount">${currency(record.amount)}</td></tr>`)
+              .join('')}
+          </tbody>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
 function receivableToIncomeTransaction(record: WorkRecord): TransactionRecord {
   return {
     rowNumber: record.rowNumber,
@@ -413,6 +490,7 @@ export default function App() {
   const [savedPin, setSavedPin] = useState<string | null>(null);
   const [rememberPin, setRememberPin] = useState(false);
   const [serverPinExists, setServerPinExists] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
   const [creatingPin, setCreatingPin] = useState(false);
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -541,6 +619,19 @@ export default function App() {
   useEffect(() => {
     loadSummary();
   }, [loadSummary]);
+
+  useEffect(() => {
+    if (!currentEmployee) return;
+
+    syncOfflineQueue()
+      .then((synced) => {
+        if (synced > 0) {
+          loadSummary();
+          Alert.alert('Offline kayıtlar işlendi', `${synced} kayıt Google Sheet tablosuna aktarıldı.`);
+        }
+      })
+      .catch(() => undefined);
+  }, [currentEmployee, loadSummary]);
 
   useEffect(() => {
     async function notifyOpenReceivables() {
@@ -684,6 +775,14 @@ export default function App() {
                 {!serverPinExists ? <Pressable style={styles.secondaryButtonFull} onPress={() => setCreatingPin(true)}>
                   <Text style={styles.secondaryButtonText}>PIN Oluştur / Değiştir</Text>
                 </Pressable> : null}
+                {serverPinExists ? (
+                  <>
+                    <Input label="Yönetici Şifresi" value={adminPassword} onChangeText={setAdminPassword} placeholder="PIN sıfırlama" keyboardType="number-pad" />
+                    <Pressable style={styles.secondaryButtonFull} onPress={resetUserPin}>
+                      <Text style={styles.secondaryButtonText}>PIN Sıfırla</Text>
+                    </Pressable>
+                  </>
+                ) : null}
               </>
             )}
               </>
@@ -747,6 +846,91 @@ export default function App() {
       body: JSON.stringify({ action: 'verify_user_pin', employee, pin }),
     });
     await readAuthResponse(response, 'PIN doğrulanamadı');
+  }
+
+  async function resetUserPin() {
+    if (!adminPassword.trim()) {
+      Alert.alert('Yönetici şifresi gerekli', 'PIN sıfırlamak için yönetici şifresini gir.');
+      return;
+    }
+
+    try {
+      const response = await fetch(API_URL, {
+        method: 'PATCH',
+        headers: requestHeaders,
+        body: JSON.stringify({ action: 'reset_user_pin', employee: loginEmployee, adminPassword }),
+      });
+      await readAuthResponse(response, 'PIN sıfırlanamadı');
+      await SecureStore.deleteItemAsync(localPinKey(loginEmployee));
+      setSavedPin(null);
+      setPinInput('');
+      setNewPin('');
+      setConfirmPin('');
+      setAdminPassword('');
+      setServerPinExists(false);
+      setCreatingPin(true);
+      setBiometricAvailable(false);
+      Alert.alert('PIN sıfırlandı', `${loginEmployee} için yeni PIN oluşturabilirsin.`);
+    } catch (caught) {
+      Alert.alert('PIN sıfırlanamadı', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    }
+  }
+
+  async function readOfflineQueue(): Promise<OfflineRecord[]> {
+    const raw = await SecureStore.getItemAsync(OFFLINE_QUEUE_KEY);
+    if (!raw) return [];
+
+    try {
+      return JSON.parse(raw) as OfflineRecord[];
+    } catch {
+      return [];
+    }
+  }
+
+  async function writeOfflineQueue(queue: OfflineRecord[]) {
+    await SecureStore.setItemAsync(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+  }
+
+  async function queueOfflineRecord(payload: Record<string, unknown>) {
+    const queue = await readOfflineQueue();
+    await writeOfflineQueue([
+      ...queue,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        createdAt: new Date().toISOString(),
+        payload,
+      },
+    ]);
+  }
+
+  async function syncOfflineQueue() {
+    const queue = await readOfflineQueue();
+    if (queue.length === 0) return 0;
+
+    const remaining: OfflineRecord[] = [];
+    let synced = 0;
+
+    for (const item of queue) {
+      try {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: requestHeaders,
+          body: JSON.stringify(item.payload),
+        });
+
+        if (!response.ok) {
+          remaining.push(item);
+          continue;
+        }
+
+        synced += 1;
+      } catch {
+        remaining.push(item);
+      }
+    }
+
+    await writeOfflineQueue(remaining);
+    return synced;
   }
 
   async function changeLoginEmployee(value: string) {
@@ -962,7 +1146,26 @@ export default function App() {
       await loadSummary();
       Alert.alert('Kaydedildi', `${activeConfig.title} kaydı Google Sheet tablosuna işlendi.`);
     } catch (caught) {
-      Alert.alert('Kayıt eklenemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+      if (isNetworkFailure(caught)) {
+        const kaplan = entryPage === 'kaplanIncome' || entryPage === 'kaplanExpense';
+        await queueOfflineRecord({
+          recordType: activeConfig.recordType,
+          customer: form.customer,
+          phone: form.phone,
+          jobType: entryPage === 'kaplanIncome' ? 'Kaplan Teknik' : kaplan && !form.category.includes('Kaplan Teknik') ? `Kaplan Teknik - ${form.category}` : form.category,
+          description: form.description,
+          amount: numericAmount,
+          date: form.date,
+          paymentStatus: entryPage === 'income' || entryPage === 'kaplanIncome' ? form.paymentStatus : 'Tahsil Edildi',
+          paymentType: form.paymentType,
+          employee: currentEmployee ?? form.employee,
+          note: 'Offline kayıt',
+        });
+        resetForm(entryPage);
+        Alert.alert('Offline kaydedildi', 'İnternet gelince kayıt otomatik olarak Google Sheet tablosuna aktarılacak.');
+      } else {
+        Alert.alert('Kayıt eklenemedi', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+      }
     } finally {
       setSaving(false);
     }
@@ -1436,6 +1639,51 @@ export default function App() {
     }
   }
 
+  async function closeCurrentMonth(month: string, income: number, expenses: number, receivables: number, net: number) {
+    try {
+      setSaving(true);
+      const response = await fetch(API_URL, {
+        method: 'PATCH',
+        headers: requestHeaders,
+        body: JSON.stringify({
+          action: 'close_month',
+          month,
+          income,
+          expenses,
+          receivables,
+          net,
+          closedBy: currentEmployee ?? 'Saha',
+        }),
+      });
+      await readAuthResponse(response, 'Aylık kapanış alınamadı');
+      await loadSummary();
+      Alert.alert('Aylık kapanış alındı', `${month} ayı sabitlendi.`);
+    } catch (caught) {
+      Alert.alert('Kapanış alınamadı', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createCustomerStatementPdf(customer: string, receivables: WorkRecord[], appRecords: AppRecord[]) {
+    try {
+      const pdf = await Print.printToFileAsync({ html: customerStatementHtml(customer, receivables, appRecords) });
+      const available = await Sharing.isAvailableAsync();
+
+      if (available) {
+        await Sharing.shareAsync(pdf.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: `${customer} cari ekstresi`,
+        });
+        return;
+      }
+
+      Alert.alert('PDF hazır', pdf.uri);
+    } catch (caught) {
+      Alert.alert('PDF oluşturulamadı', caught instanceof Error ? caught.message : 'Bilinmeyen hata');
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
@@ -1490,6 +1738,7 @@ export default function App() {
             onDeleteRecord={deleteRecord}
             reportMonth={monthKey(filters.startDate) || monthKey(todayInput())}
             onCreateMonthlyReport={createMonthlyReportPdf}
+            onCloseMonth={closeCurrentMonth}
           />
         ) : null}
 
@@ -1594,6 +1843,7 @@ export default function App() {
             customerNames={customerNames}
             selectedCustomer={selectedCustomer}
             onSelectCustomer={setSelectedCustomer}
+            onCreateStatement={createCustomerStatementPdf}
           />
         ) : null}
 
@@ -1621,6 +1871,7 @@ function SummaryPage({
   onDeleteRecord,
   reportMonth,
   onCreateMonthlyReport,
+  onCloseMonth,
 }: {
   summary: AccountingSummary | null;
   recentTransactions: TransactionRecord[];
@@ -1629,6 +1880,7 @@ function SummaryPage({
   onDeleteRecord: (id: string) => void;
   reportMonth: string;
   onCreateMonthlyReport: (month: string, transactions: TransactionRecord[]) => void;
+  onCloseMonth: (month: string, income: number, expenses: number, receivables: number, net: number) => void;
 }) {
   const collectedTotal = collectedReceivables.reduce((sum, record) => sum + record.amount, 0);
   const expensesTotal = summary?.totals.expenses ?? 0;
@@ -1685,6 +1937,24 @@ function SummaryPage({
             <ChartLegendRow label="Gider" value={currency(expensesTotal)} percent={expensePercent} tone="red" />
           </View>
         </View>
+        <View style={styles.totalBand}>
+          <Text style={styles.totalBandLabel}>{currentMonth} kapanışı</Text>
+          <Pressable
+            style={styles.primaryButtonInline}
+            onPress={() => onCloseMonth(currentMonth, monthlyIncome, monthlyExpenses, summary?.totals.receivables ?? 0, monthlyIncome - monthlyExpenses)}
+          >
+            <Text style={styles.primaryButtonText}>Kapanış Al</Text>
+          </Pressable>
+        </View>
+        {summary?.monthlyClosings.slice(-4).reverse().map((closing) => (
+          <ListRow
+            key={`${closing.month}-${closing.closedAt}`}
+            title={closing.month}
+            subtitle={`${closing.closedBy} · ${closing.closedAt}`}
+            value={currency(closing.net)}
+            tone={closing.net >= 0 ? 'green' : 'red'}
+          />
+        ))}
       </View>
 
       <View style={styles.summaryGrid}>
@@ -2179,11 +2449,13 @@ function CustomerPage({
   customerNames,
   selectedCustomer,
   onSelectCustomer,
+  onCreateStatement,
 }: {
   summary: AccountingSummary | null;
   customerNames: string[];
   selectedCustomer: string;
   onSelectCustomer: (customer: string) => void;
+  onCreateStatement: (customer: string, receivables: WorkRecord[], appRecords: AppRecord[]) => void;
 }) {
   const activeCustomer = selectedCustomer || customerNames[0] || '';
   const receivables = summary?.receivables.filter((record) => record.customer === activeCustomer) ?? [];
@@ -2221,6 +2493,12 @@ function CustomerPage({
           </View>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{activeCustomer}</Text>
+            <View style={styles.totalBand}>
+              <Text style={styles.totalBandLabel}>Cari ekstresi</Text>
+              <Pressable style={styles.primaryButtonInline} onPress={() => onCreateStatement(activeCustomer, receivables, appRecords)}>
+                <Text style={styles.primaryButtonText}>PDF İndir</Text>
+              </Pressable>
+            </View>
             {[...receivables].reverse().map((record, index) => (
               <ListRow
                 key={`${record.rowNumber}-${index}`}

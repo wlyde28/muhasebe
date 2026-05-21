@@ -3,8 +3,10 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypt
 import type {
   AccountingSummary,
   AppRecord,
+  CloseMonthPayload,
   CreateRecordPayload,
   DeletedRecord,
+  MonthlyClosing,
   PartnerExpense,
   PartnerSummary,
   RestoreDeletedPayload,
@@ -28,6 +30,7 @@ const SHEETS = {
   deletedRecords: "Silinen Kayıtlar",
 };
 const USER_PINS_SHEET = "Kullanici PINleri";
+const MONTHLY_CLOSINGS_SHEET = "Aylik Kapanislar";
 
 function cleanEnv(value: string | undefined): string {
   return String(value ?? "").replace(/^\uFEFF/, "").trim();
@@ -88,6 +91,7 @@ const sampleSummary: AccountingSummary = {
     openItems: [],
     closedItems: [],
   },
+  monthlyClosings: [],
   generatedAt: new Date().toISOString(),
 };
 
@@ -274,6 +278,22 @@ function mapDeletedRecords(rows: string[][]): DeletedRecord[] {
     .filter((row) => row.deletedAt || row.source || row.recordType || row.customer || row.description || row.amount);
 }
 
+function mapMonthlyClosings(rows: string[][]): MonthlyClosing[] {
+  return rows
+    .slice(1)
+    .map((row, index) => ({
+      rowNumber: index + 2,
+      month: row[0] ?? "",
+      income: parseAmount(row[1]),
+      expenses: parseAmount(row[2]),
+      receivables: parseAmount(row[3]),
+      net: parseAmount(row[4]),
+      closedBy: row[5] ?? "",
+      closedAt: row[6] ?? "",
+    }))
+    .filter((row) => row.month);
+}
+
 function parsePartnerExpense(record: TransactionRecord): PartnerExpense | null {
   if (record.type !== "Gider" || !record.description.includes("[ORTAK:")) {
     return null;
@@ -391,6 +411,15 @@ function verifyPinHash(pin: string, salt: string, hash: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+function verifyAdminPassword(value: unknown): void {
+  const expected = cleanEnv(process.env.APP_ADMIN_PIN) || cleanEnv(process.env.APP_SHARED_PIN);
+  const provided = String(value ?? "").trim();
+
+  if (!expected || provided !== expected) {
+    throw new Error("Yonetici sifresi hatali.");
+  }
+}
+
 async function ensureUserPinsSheet(
   sheets: Awaited<ReturnType<typeof getSheetsClient>>,
   spreadsheetId: string,
@@ -411,6 +440,31 @@ async function ensureUserPinsSheet(
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [["Kullanici", "Salt", "PIN Hash", "Guncelleme Tarihi"]],
+      },
+    });
+  }
+}
+
+async function ensureMonthlyClosingsSheet(
+  sheets: Awaited<ReturnType<typeof getSheetsClient>>,
+  spreadsheetId: string,
+): Promise<void> {
+  const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+  const exists = metadata.data.sheets?.some((sheet) => sheet.properties?.title === MONTHLY_CLOSINGS_SHEET);
+
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: MONTHLY_CLOSINGS_SHEET } } }],
+      },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${MONTHLY_CLOSINGS_SHEET}'!A1:G1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [["Ay", "Tahsil Edilen", "Gider", "Tahsil Edilmeyen", "Net Kar", "Kapatan", "Kapanis Tarihi"]],
       },
     });
   }
@@ -476,6 +530,7 @@ async function logDeletedRecord(
   values: (string | number)[],
 ): Promise<void> {
   await ensureDeletedSheet(sheets, spreadsheetId);
+  await ensureMonthlyClosingsSheet(sheets, spreadsheetId);
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: `'${SHEETS.deletedRecords}'!A:H`,
@@ -545,24 +600,27 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
 
   const sheets = await getSheetsClient();
   await ensureDeletedSheet(sheets, spreadsheetId);
+  await ensureMonthlyClosingsSheet(sheets, spreadsheetId);
   const response = await sheets.spreadsheets.values.batchGet({
     spreadsheetId,
     ranges: [
       "'Kaplan Teknik'!A1:D500",
       "'Tahsilat Takibi'!A1:D500",
       "Sheet1!A1:I500",
+      `'${MONTHLY_CLOSINGS_SHEET}'!A1:G500`,
       "'App Kayıtları'!A1:K500",
       "'Silinen Kayıtlar'!A1:H500",
     ],
   });
 
-  const [jobsRange, receivablesRange, transactionsRange, appRecordsRange, deletedRecordsRange] =
+  const [jobsRange, receivablesRange, transactionsRange, monthlyClosingsRange, appRecordsRange, deletedRecordsRange] =
     response.data.valueRanges ?? [];
   const jobs = mapJobs(rowsFromRange(jobsRange?.values as string[][] | undefined));
   const receivables = mapReceivables((receivablesRange?.values as string[][] | undefined) ?? []);
   const transactions = mapTransactions(rowsFromRange(transactionsRange?.values as string[][] | undefined));
   const appRecords = mapAppRecords(rowsFromRange(appRecordsRange?.values as string[][] | undefined));
   const deletedRecords = mapDeletedRecords(rowsFromRange(deletedRecordsRange?.values as string[][] | undefined));
+  const monthlyClosings = mapMonthlyClosings(rowsFromRange(monthlyClosingsRange?.values as string[][] | undefined));
   const partner = summarizePartner(transactions);
 
   const income = transactions
@@ -595,6 +653,7 @@ export async function getAccountingSummary(): Promise<AccountingSummary> {
     appRecords,
     deletedRecords,
     partner,
+    monthlyClosings,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -767,6 +826,106 @@ export async function verifyUserPin(payload: UserPinPayload): Promise<UserPinSta
   }
 
   return { employee, hasPin: true };
+}
+
+export async function resetUserPin(payload: UserPinPayload): Promise<UserPinStatus> {
+  const employee = normalizeEmployee(payload.employee);
+  verifyAdminPassword(payload.adminPassword);
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+
+  if (!hasGoogleCredentials()) {
+    return { employee, hasPin: false };
+  }
+
+  const sheets = await getSheetsClient();
+  const rows = await readUserPinRows(sheets, spreadsheetId);
+  const existing = findUserPinRow(rows, employee);
+
+  if (!existing) {
+    return { employee, hasPin: false };
+  }
+
+  const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = metadata.data.sheets?.find((item) => item.properties?.title === USER_PINS_SHEET);
+  const sheetId = sheet?.properties?.sheetId;
+
+  if (sheetId === undefined || sheetId === null) {
+    throw new Error("PIN sayfasi bulunamadi.");
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          deleteDimension: {
+            range: {
+              sheetId,
+              dimension: "ROWS",
+              startIndex: existing.rowNumber - 1,
+              endIndex: existing.rowNumber,
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  return { employee, hasPin: false };
+}
+
+export async function closeMonth(payload: CloseMonthPayload): Promise<MonthlyClosing> {
+  const month = String(payload.month ?? "").trim();
+
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    throw new Error("Kapanis ayi YYYY-AA formatinda olmali.");
+  }
+
+  const spreadsheetId = cleanEnv(process.env.GOOGLE_SHEET_ID) || DEFAULT_SPREADSHEET_ID;
+  const closing: MonthlyClosing = {
+    month,
+    income: Number(payload.income ?? 0),
+    expenses: Number(payload.expenses ?? 0),
+    receivables: Number(payload.receivables ?? 0),
+    net: Number(payload.net ?? 0),
+    closedBy: String(payload.closedBy ?? "Saha").trim() || "Saha",
+    closedAt: nowTr(),
+  };
+
+  if (!hasGoogleCredentials()) {
+    return closing;
+  }
+
+  const sheets = await getSheetsClient();
+  await ensureMonthlyClosingsSheet(sheets, spreadsheetId);
+  const rowsResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${MONTHLY_CLOSINGS_SHEET}'!A:G`,
+  });
+  const rows = rowsFromRange(rowsResponse.data.values as string[][] | undefined);
+  const existingIndex = rows.slice(1).findIndex((row) => row[0] === month);
+  const values = [[closing.month, closing.income, closing.expenses, closing.receivables, closing.net, closing.closedBy, closing.closedAt]];
+
+  if (existingIndex >= 0) {
+    const rowNumber = existingIndex + 2;
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${MONTHLY_CLOSINGS_SHEET}'!A${rowNumber}:G${rowNumber}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values },
+    });
+    return { ...closing, rowNumber };
+  }
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${MONTHLY_CLOSINGS_SHEET}'!A:G`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values },
+  });
+
+  return closing;
 }
 
 export async function updateReceivable(payload: UpdateReceivablePayload): Promise<WorkRecord> {
