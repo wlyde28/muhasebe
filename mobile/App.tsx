@@ -1572,6 +1572,10 @@ function SummaryPage({
     <>
       <View style={styles.summaryGrid}>
         <Metric label="Tahsil Edilen" value={currency(collectedTotal)} tone="green" />
+        <Metric label="Tahsil Edilmeyen" value={currency(summary?.totals.receivables ?? 0)} tone="orange" />
+      </View>
+
+      <View style={styles.summaryGrid}>
         <Metric label="Gider" value={currency(expensesTotal)} tone="red" />
         <Metric label="Net Kar" value={currency(netProfit)} tone="blue" />
       </View>
