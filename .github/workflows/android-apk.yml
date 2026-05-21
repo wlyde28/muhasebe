@@ -11,7 +11,7 @@ on:
 
 jobs:
   build-apk:
-    name: Build debug APK
+    name: Build release APK
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -46,11 +46,11 @@ jobs:
           EXPO_PUBLIC_API_URL: https://web-theta-seven-73.vercel.app/api/records
           EXPO_PUBLIC_APP_PIN: "1234"
 
-      - name: Build APK
+      - name: Build release APK
         run: |
           chmod +x android/gradlew
           cd android
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
         env:
           EXPO_PUBLIC_API_URL: https://web-theta-seven-73.vercel.app/api/records
           EXPO_PUBLIC_APP_PIN: "1234"
@@ -58,5 +58,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: muhasebe-debug-apk
-          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          name: muhasebe-release-apk
+          path: mobile/android/app/build/outputs/apk/release/*.apk
