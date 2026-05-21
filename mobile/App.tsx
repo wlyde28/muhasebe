@@ -407,6 +407,7 @@ export default function App() {
   const [form, setForm] = useState<FormState>(initialForm);
   const [settlementForm, setSettlementForm] = useState<SettlementFormState>(initialSettlementForm);
   const [currentEmployee, setCurrentEmployee] = useState<EmployeeName | null>(null);
+  const [showWelcome, setShowWelcome] = useState(false);
   const [loginEmployee, setLoginEmployee] = useState<EmployeeName>('Durukan');
   const [pinInput, setPinInput] = useState('');
   const [savedPin, setSavedPin] = useState<string | null>(null);
@@ -610,6 +611,18 @@ export default function App() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!showWelcome) {
+      return undefined;
+    }
+
+    const timeout = setTimeout(() => {
+      setShowWelcome(false);
+    }, 1800);
+
+    return () => clearTimeout(timeout);
+  }, [showWelcome]);
+
   if (!currentEmployee) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -681,6 +694,20 @@ export default function App() {
     );
   }
 
+  if (showWelcome) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <View style={styles.welcomeScreen}>
+          <Image source={require('./assets/brand-logo.png')} style={styles.welcomeLogo} resizeMode="contain" />
+          <Text style={styles.welcomeTitle}>Hoş geldin</Text>
+          <Text style={styles.welcomeUser}>{currentEmployee}</Text>
+          <ActivityIndicator color="#ffffff" style={styles.welcomeLoader} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   function updateForm(key: keyof FormState, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -746,6 +773,7 @@ export default function App() {
 
   function completeLogin(employee: EmployeeName) {
     setCurrentEmployee(employee);
+    setShowWelcome(true);
     setForm((current) => ({ ...current, employee }));
   }
 
@@ -2666,6 +2694,32 @@ const styles = StyleSheet.create({
     height: 96,
     marginBottom: 14,
     width: 96,
+  },
+  welcomeScreen: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 24,
+  },
+  welcomeLogo: {
+    height: 148,
+    marginBottom: 24,
+    width: 148,
+  },
+  welcomeTitle: {
+    color: '#ffffff',
+    fontSize: 30,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  welcomeUser: {
+    color: '#b8d7ff',
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 8,
+  },
+  welcomeLoader: {
+    marginTop: 26,
   },
   loginTitle: {
     color: '#ffffff',
